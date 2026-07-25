@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     ForeignKeyConstraint,
     String,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -18,6 +19,7 @@ from app.models.enums import DocumentType, ProcessingStatus
 
 if TYPE_CHECKING:
     from app.models.company import Company
+    from app.models.financial_analysis_result import FinancialAnalysisResult
     from app.models.financial_period import FinancialPeriod
 
 
@@ -49,6 +51,23 @@ class FinancialDocument(Base):
             ["financial_periods.id", "financial_periods.company_id"],
             ondelete="RESTRICT",
             name="fk_financial_documents_period_company_consistency",
+        ),
+        # Milestone 2 / Adım 2: FinancialAnalysisResult'ın composite FK
+        # hedefi olabilmesi için (id, company_id, period_id) üçlüsünün
+        # tekil olduğunu garanti eder.
+        UniqueConstraint(
+            "id",
+            "company_id",
+            "period_id",
+            name="uq_financial_documents_id_company_period",
+        ),
+        # Aynı dönem için aynı checksum'a sahip bir belge yalnızca bir kez
+        # var olabilir (409 Conflict kararı) -- farklı dönemler/firmalar
+        # için aynı checksum serbesttir.
+        UniqueConstraint(
+            "period_id",
+            "checksum",
+            name="uq_financial_documents_period_checksum",
         ),
     )
 
@@ -121,4 +140,9 @@ class FinancialDocument(Base):
     period: Mapped["FinancialPeriod"] = relationship(
         back_populates="documents",
         foreign_keys=[period_id],
+    )
+    analysis_results: Mapped[list["FinancialAnalysisResult"]] = relationship(
+        back_populates="document",
+        foreign_keys="[FinancialAnalysisResult.document_id]",
+        passive_deletes=True,
     )

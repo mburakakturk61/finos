@@ -1,18 +1,24 @@
 from fastapi import FastAPI, File, HTTPException, UploadFile
 
+from app.api.v1.analyses import router as analyses_router
 from app.api.v1.companies import router as companies_router
+from app.api.v1.documents import router as documents_router
 from app.api.v1.periods import router as periods_router
+from app.api.v1.trial_balances import router as trial_balances_router
 from app.trial_balance.service import analyze_trial_balance
 
 
 app = FastAPI(
     title="FINOS API",
-    version="0.4.0",
+    version="0.5.0",
     description="Financial Intelligence & Operating System",
 )
 
 app.include_router(companies_router)
 app.include_router(periods_router)
+app.include_router(trial_balances_router)
+app.include_router(documents_router)
+app.include_router(analyses_router)
 
 
 @app.get("/")
@@ -20,7 +26,7 @@ def root():
     return {
         "application": "FINOS",
         "status": "running",
-        "version": "0.4.0",
+        "version": "0.5.0",
     }
 
 

@@ -33,6 +33,29 @@ class DocumentType(str, enum.Enum):
 
 
 class ProcessingStatus(str, enum.Enum):
+    """FinancialDocument.processing_status için kullanılır."""
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class AnalysisType(str, enum.Enum):
+    """Yalnızca trial_balance bu milestone'da destekleniyor; diğer analiz
+    türleri (ör. tax_reconciliation) ileride eklenebilir."""
+
+    TRIAL_BALANCE = "trial_balance"
+
+
+class AnalysisStatus(str, enum.Enum):
+    """
+    FinancialAnalysisResult.status için kullanılır. Bilinçli olarak
+    ProcessingStatus'tan AYRI bir enum -- belge işlenmesi ile analiz
+    çalışmasının durumu farklı kavramlardır ve bağımsız evrilebilmelidir
+    (Milestone 2 / Adım 2 mimari kararı).
+    """
+
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
