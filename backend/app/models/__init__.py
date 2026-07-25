@@ -1,0 +1,25 @@
+"""
+Tüm ORM modelleri burada import edilir ki Base.metadata (ve dolayısıyla
+Alembic autogenerate) her modeli görsün. Yeni bir model eklendiğinde
+buraya da eklenmesi gerekir.
+"""
+
+from app.models.company import Company
+from app.models.enums import (
+    DocumentType,
+    PeriodStatus,
+    PeriodType,
+    ProcessingStatus,
+)
+from app.models.financial_document import FinancialDocument
+from app.models.financial_period import FinancialPeriod
+
+__all__ = [
+    "Company",
+    "FinancialPeriod",
+    "FinancialDocument",
+    "PeriodType",
+    "PeriodStatus",
+    "DocumentType",
+    "ProcessingStatus",
+]
