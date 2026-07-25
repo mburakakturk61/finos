@@ -4,10 +4,15 @@ Alembic autogenerate) her modeli görsün. Yeni bir model eklendiğinde
 buraya da eklenmesi gerekir.
 """
 
+from app.models.bulk_upload_batch import BulkUploadBatch
+from app.models.bulk_upload_item import BulkUploadItem
 from app.models.company import Company
 from app.models.enums import (
     AnalysisStatus,
     AnalysisType,
+    BatchStatus,
+    ClassificationStatus,
+    DetectedDocumentType,
     DocumentType,
     PeriodStatus,
     PeriodType,
@@ -22,10 +27,15 @@ __all__ = [
     "FinancialPeriod",
     "FinancialDocument",
     "FinancialAnalysisResult",
+    "BulkUploadBatch",
+    "BulkUploadItem",
     "PeriodType",
     "PeriodStatus",
     "DocumentType",
     "ProcessingStatus",
     "AnalysisType",
     "AnalysisStatus",
+    "BatchStatus",
+    "DetectedDocumentType",
+    "ClassificationStatus",
 ]

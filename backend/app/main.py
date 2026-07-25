@@ -1,6 +1,7 @@
 from fastapi import FastAPI, File, HTTPException, UploadFile
 
 from app.api.v1.analyses import router as analyses_router
+from app.api.v1.bulk_uploads import router as bulk_uploads_router
 from app.api.v1.companies import router as companies_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.periods import router as periods_router
@@ -19,6 +20,7 @@ app.include_router(periods_router)
 app.include_router(trial_balances_router)
 app.include_router(documents_router)
 app.include_router(analyses_router)
+app.include_router(bulk_uploads_router)
 
 
 @app.get("/")

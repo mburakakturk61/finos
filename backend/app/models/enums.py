@@ -41,6 +41,44 @@ class ProcessingStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class BatchStatus(str, enum.Enum):
+    """BulkUploadBatch.status için kullanılır (Milestone 2 / Adım 3)."""
+
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class DetectedDocumentType(str, enum.Enum):
+    """
+    DocumentClassifier'ın üretebileceği türler. Bilinçli olarak
+    DocumentType'tan (FinancialDocument) AYRI bir enum -- bu, henüz
+    onaylanmamış bir TAHMİN kümesidir, DocumentType ise onaylanmış/kalıcı
+    bir belgenin gerçek türüdür. UNKNOWN yalnızca burada anlamlıdır.
+    """
+
+    TRIAL_BALANCE = "trial_balance"
+    CORPORATE_TAX_RETURN = "corporate_tax_return"
+    TEMPORARY_TAX_RETURN = "temporary_tax_return"
+    BALANCE_SHEET = "balance_sheet"
+    INCOME_STATEMENT = "income_statement"
+    UNKNOWN = "unknown"
+
+
+class ClassificationStatus(str, enum.Enum):
+    """
+    BulkUploadItem.classification_status. Beş değer de birbirinden
+    AYRI ve karşılıklı dışlayıcıdır (bir item yalnızca birinde yer alır);
+    ek bağlam warnings_json'dadır.
+    """
+
+    AUTO_MATCHED = "auto_matched"
+    NEEDS_REVIEW = "needs_review"
+    DUPLICATE = "duplicate"
+    POSSIBLE_DUPLICATE = "possible_duplicate"
+    UNRECOGNIZED = "unrecognized"
+
+
 class AnalysisType(str, enum.Enum):
     """Yalnızca trial_balance bu milestone'da destekleniyor; diğer analiz
     türleri (ör. tax_reconciliation) ileride eklenebilir."""

@@ -4,6 +4,12 @@ python-multipart>=0.0.20,<1
 pandas>=2.2,<3
 openpyxl>=3.1,<4
 
+# Bulk upload classification (Milestone 2 / Adım 3): lightweight PDF text
+# extraction + legacy .xls (OLE2/BIFF) read support. Neither is a runtime
+# dependency for trial_balance/**, which remains untouched.
+pypdf>=4.3,<6
+xlrd>=2.0,<3
+
 # Persistence layer (Milestone 2)
 sqlalchemy>=2.0,<3
 alembic>=1.13,<2

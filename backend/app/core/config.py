@@ -22,6 +22,14 @@ class Settings(BaseSettings):
 
     trial_balance_max_upload_bytes: int = 10 * 1024 * 1024
 
+    # Milestone 2 / Adım 3: toplu yükleme + sınıflandırma önizlemesi.
+    # Ayrı bir ayar olarak tutuluyor -- trial_balance'ın 10 MB sınırıyla
+    # kavramsal olarak aynı değeri paylaşsa da, iki farklı özelliğin
+    # limitlerini aynı ayara bağlamak ileride birini değiştirmeyi
+    # zorlaştırır.
+    bulk_upload_max_files: int = 20
+    bulk_upload_max_file_bytes: int = 10 * 1024 * 1024
+
     default_page_limit: int = 50
     max_page_limit: int = 200
 
