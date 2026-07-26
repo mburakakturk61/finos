@@ -266,6 +266,96 @@ alembic upgrade head
 pytest tests/ -v
 ```
 
+## 5. Milestone 4.1: Analysis Foundation (yalnızca altyapı, henüz motor yok)
+
+Bu adım hiçbir yeni motor (Balance Sheet/Income Statement/Cash Flow/Tax
+Return/Financial Ratio) implemente etmedi -- yalnızca Milestone 4'ün geri
+kalanının üzerine kurulacağı şema/sözleşme altyapısını kurdu. `app/trial_balance/**`
+ve mevcut bulk upload/trial balance upload dispatch akışlarına
+DOKUNULMADI (registry henüz gerçek dispatch'e bağlı değil, bkz. aşağısı).
+
+- `test_engine_registry_unit.py`: `app.engines.protocol`/`app.engines.registry`
+  için gerçek, çalıştırılabilir birim testleri -- `EngineSourceRef`'in XOR
+  kuralını Python seviyesinde erken doğrulaması, `TrialBalanceEngineAdapter`'ın
+  gerçek `analyze_trial_balance`'ı çalıştırıp başarı/hata durumlarını doğru
+  şekle sardığı (sentetik, tamamen kurgusal mizan verisiyle -- gerçek veri
+  yok), registry'nin HEM `DetectedDocumentType` HEM `DocumentType` üzerinden
+  aynı adaptöre eriştiği, kayıtlı olmayan tüm türler için güvenle `None`
+  döndüğü, ve -- kapsam sınırı koruması olarak -- `app/services/bulk_upload.py`
+  ile `app/services/trial_balance_upload.py`'nin `app.engines`'den hiçbir şey
+  import ETMEDİĞİNİN kaynak metni okunarak doğrulanması (onaylanan Milestone
+  4.1 kararı #1'in yanlışlıkla ihlal edilmediğinin garantisi).
+- `test_chart_of_accounts_parity.py`: `app.engines.common.chart_of_accounts`
+  içindeki BAĞIMSIZ Tekdüzen Hesap Planı kopyasının `app.trial_balance.
+  financial_statements`'daki orijinal tanımla (`BALANCE_SHEET_SECTIONS`,
+  `INCOME_STATEMENT_SECTIONS`, `get_numeric_prefix` davranışı) birebir eşit
+  kaldığını doğrular -- iki kopya arasında ileride oluşabilecek sürüklenmeyi
+  (drift) CI'de anında yakalayacak tek mekanizma (onaylanan Milestone 4.1
+  kararı #4).
+- `test_canonical_facts_unit.py`: `BalanceSheetFacts`/`IncomeStatementFacts`/
+  `CashFlowFacts`/`TaxReturnFacts`'ın hem tam hem kısmi doldurulabildiği, TÜM
+  parasal alanların `Decimal | None` olduğu (float DEĞİL), eksik verinin
+  `None` kaldığı ve `0`'ın eksik veriyle karıştırılmadığı (onaylanan
+  Milestone 4.1 kararı #6).
+- `test_financial_analysis_result_sources_postgres_integration.py` (gerçek
+  Postgres, skip-if-unavailable): `source_mode='direct_document'` iken
+  `document_id`'nin NULL olamayacağı, `trial_balance_derived`/
+  `multi_source_derived` iken NULL olabileceği, `fk_financial_analysis_results_
+  period_company`'nin `document_id`'den bağımsız olarak company/period
+  tutarlılığını HER ZAMAN garanti ettiği, `financial_analysis_result_sources`
+  tablosundaki XOR kaynak kuralı, self-reference engeli, role<->kaynak-türü
+  eşleşmesi (onaylanan karar #2), üç composite FK'nin farklı company/period'a
+  ait kaynakları reddettiği, iki unique constraint'in yinelenen kaynak
+  satırlarını engellediği, RESTRICT'in kaynak gösterilen belge/analiz
+  sonucunun silinmesini engellediği, ve `source_mode`'un Python-seviyeli ORM
+  default'unun (`direct_document`) doğru çalıştığı.
+
+### Registry'nin gerçek dispatch'e bağlı OLMADIĞI (onaylanan karar)
+
+`app/engines/registry.py` içindeki `TrialBalanceEngineAdapter`,
+`app/trial_balance/service.py::analyze_trial_balance`'ı sarar ve registry
+sözleşmesinin gerçek kodla (mock değil) çalıştığını kanıtlar -- ama
+`app/services/bulk_upload.py` ve `app/services/trial_balance_upload.py`'nin
+BUGÜNKÜ, 93/93 geçen üretim dispatch mantığı bu adımda DEĞİŞTİRİLMEDİ.
+Registry'nin gerçek dispatch'e bağlanması Milestone 4.2'de, ilk yeni motor
+(Balance Sheet/Income Statement) eklendiğinde yapılacak.
+
+### PostgreSQL 63 karakter identifier ön-kontrolü (bu adımda da tekrarlandı)
+
+Migration (`3a7c2e9f5b14`) yazılmadan ÖNCE tüm yeni constraint/index adları
+programatik olarak ölçüldü (en uzunu 55 karakter,
+`ix_financial_analysis_result_sources_analysis_result_id`) ve migration
+tamamlandıktan sonra PROJE GENELİNDE (62 identifier, eski + yeni) tekrar
+ölçüldü -- hepsi sınırın altında. İki yeni `UNIQUE` constraint
+(`uq_financial_analysis_result_sources_by_document`/`_by_analysis`) özellikle
+açık `name=` gerektiriyordu: ikisinin de `column_0_name`'i
+`analysis_result_id` olduğu için varsayılan naming convention'a
+bırakılsaydı ÇAKIŞIRDI -- `9d4f1a7c6e52`'deki 69-karakter dersiyle aynı
+kategoriden bir tuzak.
+
+### Bu sandbox'ın çalıştırma sınırlaması (yine değişmedi)
+
+Aynı kısıt geçerli: `sqlalchemy`/`fastapi`/`alembic`/`psycopg`/`pytest`/
+`httpx`/`pydantic`/`xlrd` bu sandbox'ta kurulu DEĞİL. `test_engine_registry_unit.py`,
+`test_chart_of_accounts_parity.py`, `test_canonical_facts_unit.py`
+(sqlalchemy/fastapi/pydantic'e bağımlı OLMADIKLARI için -- `app/engines/**`
+bilinçli olarak `app/trial_balance/**` gibi izole tasarlandı) sandbox-only
+`importlib` stub tekniğiyle GERÇEKTEN çalıştırıldı. `test_financial_analysis_
+result_sources_postgres_integration.py` sqlalchemy'ye bağımlı olduğu için
+bu sandbox'ta çalıştırılamadı -- yalnızca `py_compile` ile sözdizimi
+kontrolünden ve migration/modelle satır satır elle çapraz kontrolden
+geçirildi. Yerelde gerçek bir yeşil koşu için:
+
+```
+docker compose up -d db
+cd backend
+pip install -r requirements.txt
+alembic upgrade head
+pytest tests/test_engine_registry_unit.py tests/test_chart_of_accounts_parity.py \
+  tests/test_canonical_facts_unit.py \
+  tests/test_financial_analysis_result_sources_postgres_integration.py -v
+```
+
 ## Bilinçli olarak yapılmayan bir şey
 
 `backend/tests/data/generic/2024_detay_mizan.xlsx` gerçek, anonimleştirilmemiş

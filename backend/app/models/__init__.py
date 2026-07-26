@@ -8,6 +8,7 @@ from app.models.bulk_upload_batch import BulkUploadBatch
 from app.models.bulk_upload_item import BulkUploadItem
 from app.models.company import Company
 from app.models.enums import (
+    AnalysisSourceRole,
     AnalysisStatus,
     AnalysisType,
     BatchStatus,
@@ -18,8 +19,10 @@ from app.models.enums import (
     PeriodStatus,
     PeriodType,
     ProcessingStatus,
+    SourceMode,
 )
 from app.models.financial_analysis_result import FinancialAnalysisResult
+from app.models.financial_analysis_result_source import FinancialAnalysisResultSource
 from app.models.financial_document import FinancialDocument
 from app.models.financial_period import FinancialPeriod
 
@@ -28,6 +31,7 @@ __all__ = [
     "FinancialPeriod",
     "FinancialDocument",
     "FinancialAnalysisResult",
+    "FinancialAnalysisResultSource",
     "BulkUploadBatch",
     "BulkUploadItem",
     "PeriodType",
@@ -40,4 +44,6 @@ __all__ = [
     "DetectedDocumentType",
     "ClassificationStatus",
     "ItemReviewDecision",
+    "SourceMode",
+    "AnalysisSourceRole",
 ]
