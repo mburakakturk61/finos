@@ -38,6 +38,16 @@ class BalanceSheetFacts:
     long_term_liabilities: Decimal | None = None
     equity: Decimal | None = None
     total_liabilities_and_equity: Decimal | None = None
+    # Milestone 4.2: Milestone 4.3 Financial Ratio Engine'in quick ratio/
+    # cash ratio/devir hızı oranları için hazırlanan alt kalem detayı.
+    # Direct extractor yalnızca AÇIKÇA tespit edebildiğini doldurur; trial
+    # balance fallback bu ayrıntıyı HİÇ üretmez (motor bu düzeyde
+    # ayrıştırma yapmıyor) -- her iki durumda da eksik None kalır, 0
+    # varsayılmaz.
+    cash_and_equivalents: Decimal | None = None
+    inventory: Decimal | None = None
+    trade_receivables: Decimal | None = None
+    trade_payables: Decimal | None = None
     # Hesap kodu -> [{"account_code", "account_name", "amount"}] -- Decimal
     # olarak, ayrıntı satırları için isteğe bağlı kırılım. Milestone 4.2+
     # extractor'ları doldurur; None kalması "ayrıntı yok" anlamına gelir,

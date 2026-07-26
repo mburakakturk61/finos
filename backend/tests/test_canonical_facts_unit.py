@@ -74,6 +74,22 @@ def test_tax_return_facts_partial_fill():
     assert facts.temporary_differences is None
 
 
+def test_balance_sheet_facts_milestone_4_2_additive_fields():
+    # Milestone 4.2 (onaylanan karar #1): cash_and_equivalents/inventory/
+    # trade_receivables/trade_payables eklendi -- additive, hiçbir zaman
+    # 0'a varsayılanmaz, direkt extractor yalnızca tespit edebildiğini
+    # doldurur, trial_balance fallback bunları HER ZAMAN None bırakır (bkz.
+    # test_engine_balance_income_statement_unit.py).
+    facts = BalanceSheetFacts(
+        cash_and_equivalents=Decimal("1000.00"),
+        trade_receivables=Decimal("2000.00"),
+    )
+    assert facts.cash_and_equivalents == Decimal("1000.00")
+    assert facts.trade_receivables == Decimal("2000.00")
+    assert facts.inventory is None
+    assert facts.trade_payables is None
+
+
 def test_no_monetary_field_declares_float():
     for cls in ALL_FACT_CLASSES:
         instance = cls()

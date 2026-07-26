@@ -43,22 +43,55 @@ FinancialDocument/FinancialAnalysisResult) dönüştürür. ÜÇ AYRI FAZ:
     checksum'ı, duplicate document kontrolü -- İLK HATADA DURMAZ, tüm
     accepted item'lardaki tüm hataları toplar. Herhangi bir hata varsa
     HİÇBİR ŞEY yazılmadan ConfirmPreflightError fırlatılır (router -> 422).
-  FAZ 2 (_run_confirm_analyses): yalnızca BELLEKTE. trial_balance türündeki
-    item'lar için mevcut analyze_trial_balance motoru (değiştirilmeden)
-    çağrılır -- bu fonksiyon `db` parametresi bile ALMAZ, hiçbir DB
-    transaction'ı açık değilken çalışır (uzun sürebilecek analiz DB
-    kilidi tutmaz). Herhangi bir analiz başarısız olursa yine HİÇBİR ŞEY
-    yazılmadan aynı ConfirmPreflightError ile reddedilir.
+  FAZ 2 (_run_confirm_analyses): yalnızca BELLEKTE. Hangi motorun
+    çağrılacağı app.engines.registry üzerinden (analysis_type'a göre)
+    belirlenir -- bu fonksiyon `db` parametresi bile ALMAZ, hiçbir DB
+    transaction'ı açık değilken çalışır (uzun sürebilecek analiz DB kilidi
+    tutmaz). Herhangi bir analiz başarısız olursa yine HİÇBİR ŞEY
+    yazılmadan aynı ConfirmPreflightError ile reddedilir. Milestone 4.2'de
+    dependency-aware hale getirildi (bkz. modül docstring'inin altındaki
+    "Milestone 4.2" bölümü).
   FAZ 3 (_write_confirmed_records): TEK transaction. Yalnızca FAZ 1 ve
     FAZ 2 TAMAMEN başarılıysa açılır -- Company/FinancialPeriod find-or-
-    create, FinancialDocument + (varsa) FinancialAnalysisResult oluşturma,
-    BulkUploadItem.resulting_*_id'lerin set edilmesi, batch=CONFIRMED,
-    hepsi TEK commit. Herhangi bir adımda hata olursa TAM rollback --
-    yarım Company/Period/Document kaydı asla kalmaz.
+    create, FinancialDocument + (varsa) FinancialAnalysisResult +
+    (varsa) FinancialAnalysisResultSource oluşturma, BulkUploadItem.
+    resulting_*_id'lerin set edilmesi, batch=CONFIRMED, hepsi TEK commit.
+    Herhangi bir adımda hata olursa TAM rollback -- yarım Company/Period/
+    Document/Analysis kaydı asla kalmaz.
 Confirmed bir batch immutable'dır (BatchImmutableError -> 409, tekrar
 confirm edilemez, item'larına PATCH uygulanamaz). Accepted OLMAYAN
 (ignored veya hâlâ pending) hiçbir item production tablolarına yazılmaz;
 resulting_*_id'leri her zaman NULL kalır.
+
+Milestone 4.2 (Balance Sheet + Income Statement Engine) -- FAZ 1/2/3 yapısı
+AYNEN korunur, ancak aşağıdaki üç nokta değişti:
+  - Hangi türlerin dosya baytı yeniden göndermeyi ZORUNLU kıldığı
+    (`_requires_content`) artık sabit bir küme DEĞİL, app.engines.registry
+    üzerinden dinamik olarak belirlenir: bir DetectedDocumentType için
+    kayıtlı bir motor VARSA ve o motorun requires_content=True'ysa içerik
+    zorunludur. Yeni bir motor eklendiğinde bu dosyada HİÇBİR değişiklik
+    gerekmez.
+  - FAZ 2 (_run_confirm_analyses) artık dependency-aware: trial_balance
+    türündeki item'lar ÖNCE çalıştırılır, başarılı sonuçları saf/bellek-içi
+    bir `identity_key` (VKN veya company_id + yıl/dönem türü/dönem no ya da
+    period_id -- _compute_identity_key) ile anahtarlanan bir haritada
+    tutulur. Aynı batch'teki Balance Sheet/Income Statement item'ları --
+    eşleşen bir identity_key bulunursa -- bu sonucu context.trial_balance_
+    result olarak, context.trial_balance_pending_in_batch=True ile alır
+    (gerçek bir analysis_result_id henüz yoktur, sahte bir UUID ÜRETİLMEZ).
+    Eşleşme yoksa FAZ 1'de DB'den okunmuş mevcut (bu batch'ten ÖNCEKİ) bir
+    COMPLETED trial_balance sonucu (varsa) reconciliation/fallback kaynağı
+    olarak kullanılır. Herhangi bir motor ENGINE_FAILED dönerse (veya
+    beklenmeyen exception fırlatırsa) mevcut TÜM-YA-DA-HİÇBİRİ davranışı
+    KORUNUR -- FAZ 3'e hiç geçilmez.
+  - FAZ 3 (_write_confirmed_records), FinancialAnalysisResult'a ek olarak
+    artık FinancialAnalysisResultSource satırları da yazar: motorun ürettiği
+    (zaten DB id'si çözülmüş) `sources` listesi doğrudan yazılır;
+    `pending_trial_balance_source_role` doluysa (aynı-batch senaryosu),
+    trial_balance item'ları dependency-first sırayla İLK yazıldığından o
+    trial_balance'ın GERÇEK analysis id'si bu noktada zaten mevcuttur ve
+    kaynak satırı o gerçek id ile oluşturulur -- result_json'a HİÇBİR ZAMAN
+    uydurma bir UUID yazılmaz.
 """
 
 import calendar
@@ -76,6 +109,10 @@ from sqlalchemy.orm import Session
 from app.classification.evidence import add_warning, new_warnings
 from app.classification.orchestrator import classify_file
 from app.core.config import get_settings
+from app.engines.balance_sheet.service import ENGINE_VERSION as BALANCE_SHEET_ENGINE_VERSION
+from app.engines.income_statement.service import ENGINE_VERSION as INCOME_STATEMENT_ENGINE_VERSION
+from app.engines.protocol import EngineRunContext, EngineRunResult
+from app.engines.registry import get_engine_for_detected_type
 from app.models.bulk_upload_batch import BulkUploadBatch
 from app.models.bulk_upload_item import BulkUploadItem
 from app.models.company import Company
@@ -91,9 +128,9 @@ from app.models.enums import (
     ProcessingStatus,
 )
 from app.models.financial_analysis_result import FinancialAnalysisResult
+from app.models.financial_analysis_result_source import FinancialAnalysisResultSource
 from app.models.financial_document import FinancialDocument
 from app.models.financial_period import FinancialPeriod
-from app.trial_balance.service import analyze_trial_balance
 
 
 logger = logging.getLogger(__name__)
@@ -118,19 +155,176 @@ DETECTED_TO_DOCUMENT_TYPE: dict[DetectedDocumentType, DocumentType] = {
     DetectedDocumentType.INCOME_STATEMENT: DocumentType.FINANCIAL_STATEMENT,
 }
 
-# Yalnızca bu türler için gerçek bir analiz motoru var (şu an yalnızca
-# trial_balance). Confirm sırasında YALNIZCA bu türdeki accepted item'lar
-# için dosya baytının yeniden gönderilmesi ZORUNLUDUR. Diğer türler (ör.
-# corporate_tax_return, balance_sheet) için FinancialDocument yine de
-# oluşturulur -- ancak STAGING metadata'sından (ilk POST /bulk-uploads
-# sırasında gerçek bayt görülerek hesaplanmış checksum/file_size dahil),
-# baytın yeniden istenmesine gerek DUYULMADAN -- çünkü henüz çalıştırılacak
-# bir motor yok (bkz. "gerekiyorsa FinancialAnalysisResult" kararı).
-CONTENT_REQUIRED_DETECTED_TYPES = frozenset({DetectedDocumentType.TRIAL_BALANCE})
-
 PARSER_NAME = "generic"
 PARSER_VERSION = "1.0.0"
-ENGINE_VERSION = "1.0.0"
+
+# Milestone 4.2: her analiz motorunun KENDİ sürümü ayrı paketinde
+# (app.engines.<paket>.service.ENGINE_VERSION) tanımlıdır -- burada yalnızca
+# FinancialAnalysisResult.engine_version kolonuna hangi sabitin yazılacağını
+# analysis_type'a göre seçen ince bir eşleme tablosu tutulur. Yeni bir motor
+# eklendiğinde (Milestone 4.3+) yalnızca bu tabloya bir satır eklenir.
+TRIAL_BALANCE_ENGINE_VERSION = "1.0.0"
+_ENGINE_VERSION_BY_ANALYSIS_TYPE: dict[AnalysisType, str] = {
+    AnalysisType.TRIAL_BALANCE: TRIAL_BALANCE_ENGINE_VERSION,
+    AnalysisType.BALANCE_SHEET: BALANCE_SHEET_ENGINE_VERSION,
+    AnalysisType.INCOME_STATEMENT: INCOME_STATEMENT_ENGINE_VERSION,
+}
+
+
+def _requires_content(detected_document_type: DetectedDocumentType) -> bool:
+    """
+    Milestone 4.2: hangi türlerin dosya baytı yeniden göndermeyi ZORUNLU
+    kıldığı artık sabit bir küme DEĞİL, app.engines.registry üzerinden
+    dinamik olarak belirlenir -- bir DetectedDocumentType için kayıtlı bir
+    motor VARSA ve o motorun requires_content=True'ysa içerik zorunludur.
+    Kayıtlı motoru olmayan türler (ör. corporate_tax_return -- Milestone
+    4.5'i bekliyor) için FinancialDocument yine de oluşturulur, ancak
+    baytın yeniden istenmesine gerek YOKTUR (henüz çalıştırılacak bir motor
+    yok).
+    """
+
+    engine = get_engine_for_detected_type(detected_document_type)
+    return engine is not None and engine.requires_content
+
+
+def _compute_identity_key(
+    company_resolution: dict[str, Any] | None,
+    period_resolution: dict[str, Any] | None,
+) -> tuple[Any, ...]:
+    """
+    Milestone 4.2 (onaylanan karar #5): bir (firma, dönem) çözümünün, AYNI
+    confirm batch'i içinde birden fazla item tarafından "aynı firma+dönem"
+    olarak işaret edilip edilmediğini tespit etmek için kullanılan saf/
+    deterministik anahtar. GERÇEK bir DB id'sine değil,
+    _find_or_create_company/_find_or_create_period'ın kullandığı AYNI
+    eşleşme kurallarına (VKN eşleşmesi / company_id + yıl + dönem türü +
+    dönem no eşleşmesi) dayanır -- çünkü `mode="new"` bir çözüm için henüz
+    hiçbir DB id'si YOKTUR (FAZ 3'e kadar). Bu anahtar, aynı batch içindeki
+    bir trial_balance sonucunun bağımlı bir Balance Sheet/Income Statement
+    item'ı tarafından bellek-içi (FAZ 2'de) tüketilebilmesini sağlar --
+    sahte bir UUID ÜRETİLMEDEN.
+    """
+
+    company_resolution = company_resolution or {}
+    period_resolution = period_resolution or {}
+
+    if company_resolution.get("mode") == "existing":
+        company_key: tuple[Any, ...] = ("existing", str(company_resolution.get("id")))
+    else:
+        company_key = ("new", str(company_resolution.get("tax_number")))
+
+    if period_resolution.get("mode") == "existing":
+        period_key: tuple[Any, ...] = ("existing", str(period_resolution.get("id")))
+    else:
+        period_key = (
+            "new",
+            period_resolution.get("year"),
+            period_resolution.get("period_type"),
+            period_resolution.get("period_number"),
+        )
+
+    return (company_key, period_key)
+
+
+def _resolve_existing_period_id_readonly(
+    db: Session,
+    company_resolution: dict[str, Any] | None,
+    period_resolution: dict[str, Any] | None,
+) -> uuid.UUID | None:
+    """
+    Milestone 4.2 hotfix: FAZ 1 (yalnızca-okuma) sırasında, `period.mode
+    == "new"` gönderilmiş olsa bile -- `_find_or_create_company`/
+    `_find_or_create_period` ile AYNI eşleşme kurallarını (VKN / company_id
+    + yıl + dönem türü + dönem no) kullanarak -- DB'de ZATEN var olan bir
+    company/period varsa GERÇEK period_id'sini döndürür. HİÇBİR ŞEY
+    YARATMAZ -- yalnızca okur.
+
+    Kök neden notu: bu fonksiyon eklenmeden önce, hibrit kaynak modelinin
+    "DB'deki önceden var olan trial_balance sonucu" araması YALNIZCA
+    kullanıcı period'u `mode="existing"` (açık bir period.id ile) seçtiğinde
+    çalışıyordu. Ama PATCH akışının en yaygın kullanımı -- aynı VKN/yıl/
+    dönem türü/dönem no'yu `mode="new"` olarak tekrar göndermek, find-or-
+    create'in bunu SESSİZCE reuse etmesine güvenmek (bkz. mevcut
+    `test_confirm_reuses_company_and_period_across_batches`) -- bu aramayı
+    hiç TETİKLEMİYORDU; sonuç olarak farklı bir batch'te DB'de zaten var
+    olan bir trial_balance'a karşı reconciliation hiç çalışmıyordu
+    (`performed=False` kalıyordu). Bu fonksiyon o boşluğu, find-or-create'in
+    KENDİ eşleşme kurallarının salt-okunur bir aynası olarak kapatır.
+    """
+
+    if not company_resolution or not period_resolution:
+        return None
+
+    if period_resolution.get("mode") == "existing":
+        try:
+            return uuid.UUID(str(period_resolution["id"]))
+        except (TypeError, ValueError, KeyError):
+            return None
+
+    if company_resolution.get("mode") == "existing":
+        try:
+            company_id: uuid.UUID | None = uuid.UUID(str(company_resolution["id"]))
+        except (TypeError, ValueError, KeyError):
+            return None
+    else:
+        tax_number = company_resolution.get("tax_number")
+        if not tax_number:
+            return None
+        existing_company = db.scalars(
+            select(Company).where(Company.tax_number == tax_number)
+        ).first()
+        if existing_company is None:
+            return None
+        company_id = existing_company.id
+
+    year = period_resolution.get("year")
+    period_type_value = period_resolution.get("period_type")
+    period_number = period_resolution.get("period_number")
+    if year is None or period_type_value is None or period_number is None:
+        return None
+
+    try:
+        period_type = PeriodType(period_type_value)
+    except ValueError:
+        return None
+
+    existing_period = db.scalars(
+        select(FinancialPeriod).where(
+            FinancialPeriod.company_id == company_id,
+            FinancialPeriod.year == year,
+            FinancialPeriod.period_type == period_type,
+            FinancialPeriod.period_number == period_number,
+        )
+    ).first()
+
+    return existing_period.id if existing_period is not None else None
+
+
+def _find_existing_completed_trial_balance_result(
+    db: Session, period_id: uuid.UUID
+) -> tuple[uuid.UUID, dict[str, Any]] | None:
+    """
+    Milestone 4.2: bir dönem için (bu confirm batch'inden BAĞIMSIZ, DAHA
+    ÖNCE onaylanmış) en güncel COMPLETED trial_balance analiz sonucunu
+    okur -- Balance Sheet/Income Statement motorlarının hibrit kaynak
+    modelinde (fallback veya reconciliation referansı) kullanılır. FAZ 1
+    (yalnızca-okuma) içinde çağrılır.
+    """
+
+    result = db.scalars(
+        select(FinancialAnalysisResult)
+        .where(
+            FinancialAnalysisResult.period_id == period_id,
+            FinancialAnalysisResult.analysis_type == AnalysisType.TRIAL_BALANCE,
+            FinancialAnalysisResult.status == AnalysisStatus.COMPLETED,
+        )
+        .order_by(FinancialAnalysisResult.completed_at.desc())
+        .limit(1)
+    ).first()
+
+    if result is None:
+        return None
+    return result.id, result.result_json
 
 
 @dataclass
@@ -891,6 +1085,12 @@ class AcceptedItemPlan:
     company_resolution: dict[str, Any]
     period_resolution: dict[str, Any]
     detected_document_type: DetectedDocumentType
+    # Milestone 4.2 (onaylanan karar #5) eklendi:
+    identity_key: tuple[Any, ...]
+    existing_company_id: uuid.UUID | None
+    existing_period_id: uuid.UUID | None
+    existing_trial_balance_analysis_result_id: uuid.UUID | None
+    existing_trial_balance_result_json: dict[str, Any] | None
 
 
 @dataclass
@@ -999,7 +1199,7 @@ def _run_confirm_preflight(
             continue
 
         detected_document_type = DetectedDocumentType(document_type_value)
-        needs_content = detected_document_type in CONTENT_REQUIRED_DETECTED_TYPES
+        needs_content = _requires_content(detected_document_type)
 
         file_input = resubmitted_files.get(item.id)
         if needs_content:
@@ -1040,6 +1240,40 @@ def _run_confirm_preflight(
                         ),
                     })
 
+        identity_key = _compute_identity_key(company_resolution, period_resolution)
+
+        existing_company_id: uuid.UUID | None = None
+        if company_resolution and company_resolution.get("mode") == "existing":
+            try:
+                existing_company_id = uuid.UUID(str(company_resolution["id"]))
+            except (TypeError, ValueError, KeyError):
+                existing_company_id = None  # zaten yukarıda ayrı hata olarak yakalandı
+
+        existing_period_id: uuid.UUID | None = None
+        if period_resolution and period_resolution.get("mode") == "existing":
+            try:
+                existing_period_id = uuid.UUID(str(period_resolution["id"]))
+            except (TypeError, ValueError, KeyError):
+                existing_period_id = None  # zaten yukarıda ayrı hata olarak yakalandı
+
+        existing_tb_analysis_id: uuid.UUID | None = None
+        existing_tb_result_json: dict[str, Any] | None = None
+        item_engine = get_engine_for_detected_type(detected_document_type)
+        if item_engine is not None and item_engine.analysis_type != AnalysisType.TRIAL_BALANCE:
+            # Milestone 4.2 hotfix: `existing_period_id` yalnızca mode=
+            # "existing" iken doluyor -- ama find-or-create'in "new" bir
+            # çözümü de sessizce reuse edebileceği (bkz. yukarıdaki fonksiyon
+            # docstring'i) unutulmamalı. Hibrit kaynak modelinin DB'deki
+            # önceden var olan trial_balance'ı bulabilmesi için AYRI, salt-
+            # okunur bir çözümleme kullanılır (mode'dan bağımsız).
+            resolved_period_id = _resolve_existing_period_id_readonly(
+                db, company_resolution, period_resolution
+            )
+            if resolved_period_id is not None:
+                found = _find_existing_completed_trial_balance_result(db, resolved_period_id)
+                if found is not None:
+                    existing_tb_analysis_id, existing_tb_result_json = found
+
         plans.append(AcceptedItemPlan(
             item_id=item.id,
             checksum=item.checksum,
@@ -1049,6 +1283,11 @@ def _run_confirm_preflight(
             company_resolution=company_resolution,
             period_resolution=period_resolution,
             detected_document_type=detected_document_type,
+            identity_key=identity_key,
+            existing_company_id=existing_company_id,
+            existing_period_id=existing_period_id,
+            existing_trial_balance_analysis_result_id=existing_tb_analysis_id,
+            existing_trial_balance_result_json=existing_tb_result_json,
         ))
 
     if errors:
@@ -1057,46 +1296,130 @@ def _run_confirm_preflight(
     return plans
 
 
+def _run_single_engine(
+    plan: AcceptedItemPlan,
+    file_input: "UploadedFileInput | None",
+    context: EngineRunContext,
+    errors: list[dict[str, Any]],
+) -> EngineRunResult | None:
+    """Tek bir item için motoru çalıştırır; başarısızlıkta `errors`'a
+    sanitize edilmiş bir kayıt ekleyip `None` döner (ham exception/traceback
+    hiçbir zaman dışarı sızmaz -- yalnızca uygulama loguna)."""
+
+    engine = get_engine_for_detected_type(plan.detected_document_type)
+    assert engine is not None  # çağıran zaten filtreledi
+
+    try:
+        run_result = engine.run(
+            content=file_input.content if file_input is not None else None,
+            filename=plan.original_filename,
+            context=context,
+        )
+    except Exception:
+        logger.exception(
+            "Confirm sırasında %s motoru beklenmeyen hata verdi (item_id=%s)",
+            engine.analysis_type.value,
+            plan.item_id,
+        )
+        errors.append({
+            "item_id": plan.item_id, "code": "ENGINE_FAILED",
+            "message": "Belge analiz edilemedi. Belge bozuk ya da beklenen formatta olmayabilir.",
+        })
+        return None
+
+    if run_result.status != AnalysisStatus.COMPLETED:
+        errors.append({
+            "item_id": plan.item_id, "code": "ENGINE_FAILED",
+            "message": run_result.error_message or "Belge analiz edilemedi.",
+        })
+        return None
+
+    return run_result
+
+
 def _run_confirm_analyses(
     plans: list[AcceptedItemPlan],
     resubmitted_files: dict[uuid.UUID, "UploadedFileInput"],
-) -> dict[uuid.UUID, dict[str, Any]]:
+) -> dict[uuid.UUID, EngineRunResult]:
     """
     FAZ 2 -- yalnızca BELLEKTE çalışır. BİLEREK `db` parametresi ALMAZ --
-    bu, hiçbir DB transaction'ının açık olmadığını KOD SEVİYESİNDE
-    garanti eder (uzun sürebilecek analiz DB kilidi tutmaz). Yalnızca
-    trial_balance türündeki item'lar için mevcut analyze_trial_balance
-    motoru (değiştirilmeden) çağrılır. Herhangi bir analiz başarısız
-    olursa TÜM confirm isteği aynı ConfirmPreflightError ile reddedilir
-    -- henüz hiçbir transaction açılmadığı için ekstra rollback gerekmez.
+    bu, hiçbir DB transaction'ının açık olmadığını KOD SEVİYESİNDE garanti
+    eder (uzun sürebilecek analiz DB kilidi tutmaz). Hangi motorun
+    çağrılacağı app.engines.registry üzerinden (analysis_type'a göre)
+    belirlenir -- burada tür bazlı hardcoded if/elif YOKTUR.
+
+    Milestone 4.2 (onaylanan karar #5) -- dependency-aware orkestrasyon:
+    trial_balance türündeki item'lar ÖNCE çalıştırılır; başarılı sonuçları
+    `plan.identity_key` ile anahtarlanan bir bellek-içi haritada
+    (`batch_trial_balance_context`) tutulur. Ardından diğer (Balance
+    Sheet/Income Statement) item'lar çalıştırılır -- her biri için kaynak
+    önceliği: (1) FAZ 1'de DB'den okunmuş, bu batch'ten ÖNCE var olan bir
+    COMPLETED trial_balance sonucu; (2) yoksa, AYNI identity_key ile AYNI
+    batch'te az önce üretilmiş bir trial_balance sonucu (gerçek bir DB id'si
+    henüz YOKTUR -- context.trial_balance_pending_in_batch=True ile motora
+    işaretlenir, sahte bir UUID ÜRETİLMEZ).
+
+    Herhangi bir motor ENGINE_FAILED dönerse (veya beklenmeyen bir exception
+    fırlatırsa) TÜM confirm isteği aynı ConfirmPreflightError ile reddedilir
+    -- henüz hiçbir transaction açılmadığı için ekstra rollback gerekmez,
+    FAZ 3'e hiç geçilmez.
     """
 
-    results: dict[uuid.UUID, dict[str, Any]] = {}
+    def _analysis_type_of(plan: AcceptedItemPlan) -> AnalysisType | None:
+        engine = get_engine_for_detected_type(plan.detected_document_type)
+        return engine.analysis_type if engine is not None else None
+
+    trial_balance_plans = [
+        plan for plan in plans
+        if _analysis_type_of(plan) == AnalysisType.TRIAL_BALANCE
+    ]
+    other_engine_plans = [
+        plan for plan in plans
+        if (analysis_type := _analysis_type_of(plan)) is not None
+        and analysis_type != AnalysisType.TRIAL_BALANCE
+    ]
+
+    results: dict[uuid.UUID, EngineRunResult] = {}
     errors: list[dict[str, Any]] = []
+    batch_trial_balance_context: dict[tuple[Any, ...], EngineRunResult] = {}
 
-    for plan in plans:
-        if plan.detected_document_type != DetectedDocumentType.TRIAL_BALANCE:
-            continue
-
+    for plan in trial_balance_plans:
         file_input = resubmitted_files[plan.item_id]  # FAZ 1 zaten garantiledi
-        try:
-            results[plan.item_id] = analyze_trial_balance(
-                content=file_input.content,
-                filename=plan.original_filename,
-            )
-        except Exception:
-            logger.exception(
-                "Confirm sırasında trial_balance motoru hata verdi "
-                "(item_id=%s)",
-                plan.item_id,
-            )
-            errors.append({
-                "item_id": plan.item_id, "code": "ENGINE_FAILED",
-                "message": (
-                    "Dosya analiz edilemedi. Dosya bozuk ya da beklenen "
-                    "mizan formatında olmayabilir."
-                ),
-            })
+        context = EngineRunContext(
+            company_id=plan.existing_company_id,
+            period_id=plan.existing_period_id,
+        )
+        run_result = _run_single_engine(plan, file_input, context, errors)
+        if run_result is None:
+            continue
+        results[plan.item_id] = run_result
+        batch_trial_balance_context[plan.identity_key] = run_result
+
+    for plan in other_engine_plans:
+        file_input = resubmitted_files.get(plan.item_id)
+
+        trial_balance_result: dict[str, Any] | None = None
+        trial_balance_analysis_result_id: uuid.UUID | None = None
+        trial_balance_pending_in_batch = False
+
+        if plan.existing_trial_balance_result_json is not None:
+            trial_balance_result = plan.existing_trial_balance_result_json
+            trial_balance_analysis_result_id = plan.existing_trial_balance_analysis_result_id
+        elif plan.identity_key in batch_trial_balance_context:
+            trial_balance_result = batch_trial_balance_context[plan.identity_key].result_json
+            trial_balance_pending_in_batch = True
+
+        context = EngineRunContext(
+            company_id=plan.existing_company_id,
+            period_id=plan.existing_period_id,
+            trial_balance_result=trial_balance_result,
+            trial_balance_analysis_result_id=trial_balance_analysis_result_id,
+            trial_balance_pending_in_batch=trial_balance_pending_in_batch,
+        )
+        run_result = _run_single_engine(plan, file_input, context, errors)
+        if run_result is None:
+            continue
+        results[plan.item_id] = run_result
 
     if errors:
         raise ConfirmPreflightError(errors)
@@ -1182,12 +1505,21 @@ def _write_confirmed_records(
     db: Session,
     batch_id: uuid.UUID,
     plans: list[AcceptedItemPlan],
-    analysis_results: dict[uuid.UUID, dict[str, Any]],
+    analysis_results: dict[uuid.UUID, EngineRunResult],
 ) -> ConfirmSummary:
     """
     FAZ 3 -- TEK transaction. Yalnızca FAZ 1 ve FAZ 2 TAMAMEN başarılıysa
     çağrılır. Herhangi bir adımda hata olursa TAM rollback -- yarım
-    Company/Period/Document/Analysis kaydı asla kalmaz.
+    Company/Period/Document/Analysis/AnalysisResultSource kaydı asla kalmaz.
+
+    Milestone 4.2 (onaylanan karar #5): plan'lar dependency-first sırayla
+    (trial_balance item'ları ÖNCE) işlenir -- Python'ın sort()'u STABLE
+    olduğundan aynı grup içi orijinal sıra korunur. Bu, bir Balance Sheet/
+    Income Statement item'ının `pending_trial_balance_source_role`'ünü
+    çözebilmek için gereken GERÇEK trial_balance analysis id'sinin, o item
+    işlenmeden ÖNCE zaten flush edilmiş olmasını garanti eder.
+    `item_results`, API sözleşmesini bozmamak için en sonda orijinal `plans`
+    sırasına göre yeniden düzenlenir.
     """
 
     counts = {
@@ -1197,11 +1529,21 @@ def _write_confirmed_records(
         "reused_period_count": 0,
         "created_document_count": 0,
         "created_analysis_count": 0,
+        "created_source_link_count": 0,
     }
-    item_results: list[dict[str, Any]] = []
+    item_results_by_id: dict[uuid.UUID, dict[str, Any]] = {}
+
+    ordered_plans = sorted(
+        plans,
+        key=lambda plan: 0 if (
+            (result := analysis_results.get(plan.item_id)) is not None
+            and result.analysis_type == AnalysisType.TRIAL_BALANCE
+        ) else 1,
+    )
+    batch_trial_balance_analysis_ids: dict[tuple[Any, ...], uuid.UUID] = {}
 
     try:
-        for plan in plans:
+        for plan in ordered_plans:
             company, company_created = _find_or_create_company(db, plan.company_resolution)
             counts["created_company_count" if company_created else "reused_company_count"] += 1
 
@@ -1213,7 +1555,6 @@ def _write_confirmed_records(
             document_type = DETECTED_TO_DOCUMENT_TYPE[plan.detected_document_type]
             engine_result = analysis_results.get(plan.item_id)
             now = datetime.now(timezone.utc)
-            is_trial_balance = plan.detected_document_type == DetectedDocumentType.TRIAL_BALANCE
 
             document = FinancialDocument(
                 company_id=company.id,
@@ -1223,8 +1564,8 @@ def _write_confirmed_records(
                 mime_type=plan.mime_type,
                 file_size=plan.file_size,
                 checksum=plan.checksum,
-                parser_name=PARSER_NAME if is_trial_balance else None,
-                parser_version=PARSER_VERSION if is_trial_balance else None,
+                parser_name=PARSER_NAME if engine_result is not None else None,
+                parser_version=PARSER_VERSION if engine_result is not None else None,
                 processing_status=(
                     ProcessingStatus.COMPLETED if engine_result is not None
                     else ProcessingStatus.PENDING
@@ -1241,17 +1582,61 @@ def _write_confirmed_records(
                     company_id=company.id,
                     period_id=period.id,
                     document_id=document.id,
-                    analysis_type=AnalysisType.TRIAL_BALANCE,
-                    engine_version=ENGINE_VERSION,
+                    analysis_type=engine_result.analysis_type,
+                    engine_version=_ENGINE_VERSION_BY_ANALYSIS_TYPE[engine_result.analysis_type],
                     status=AnalysisStatus.COMPLETED,
+                    source_mode=engine_result.source_mode,
                     started_at=now,
                     completed_at=now,
-                    result_json=engine_result,
+                    result_json=engine_result.result_json,
                 )
                 db.add(analysis)
                 db.flush()
                 counts["created_analysis_count"] += 1
-                document.source_system = engine_result.get("vendor")
+                document.source_system = (engine_result.result_json or {}).get("vendor")
+
+                if engine_result.analysis_type == AnalysisType.TRIAL_BALANCE:
+                    batch_trial_balance_analysis_ids[plan.identity_key] = analysis.id
+
+                for source_ref in engine_result.sources:
+                    db.add(FinancialAnalysisResultSource(
+                        analysis_result_id=analysis.id,
+                        company_id=company.id,
+                        period_id=period.id,
+                        source_document_id=source_ref.document_id,
+                        source_analysis_result_id=source_ref.analysis_result_id,
+                        role=source_ref.role,
+                    ))
+                    counts["created_source_link_count"] += 1
+
+                if engine_result.pending_trial_balance_source_role is not None:
+                    resolved_tb_analysis_id = batch_trial_balance_analysis_ids.get(
+                        plan.identity_key
+                    )
+                    if resolved_tb_analysis_id is None:
+                        # Bu ASLA olmamalı: FAZ 2, pending_trial_balance_source_role'ü
+                        # yalnızca aynı identity_key ile FAZ 2'de BAŞARIYLA çalışmış
+                        # bir trial_balance item'ı varsa dolduruyor; aynı
+                        # dependency-first sıralama burada da uygulandığından o
+                        # trial_balance'ın analysis id'si bu noktada zaten mevcut
+                        # olmalı. Savunmacı: orkestrasyon invariant'ı bozulursa
+                        # sessizce yanlış/eksik bir kaynak satırı YAZMAK yerine
+                        # TÜM transaction'ı başarısız kıl (aşağıdaki except bloğu
+                        # yakalayıp tam rollback yapacak).
+                        raise RuntimeError(
+                            "Aynı-batch trial_balance kaynağı beklenirken "
+                            "bulunamadı (orkestrasyon invariant ihlali, "
+                            f"item_id={plan.item_id})."
+                        )
+                    db.add(FinancialAnalysisResultSource(
+                        analysis_result_id=analysis.id,
+                        company_id=company.id,
+                        period_id=period.id,
+                        source_document_id=None,
+                        source_analysis_result_id=resolved_tb_analysis_id,
+                        role=engine_result.pending_trial_balance_source_role,
+                    ))
+                    counts["created_source_link_count"] += 1
 
             item = db.get(BulkUploadItem, plan.item_id)
             item.resulting_company_id = company.id
@@ -1259,13 +1644,13 @@ def _write_confirmed_records(
             item.resulting_document_id = document.id
             item.resulting_analysis_id = analysis.id if analysis else None
 
-            item_results.append({
+            item_results_by_id[plan.item_id] = {
                 "item_id": plan.item_id,
                 "resulting_company_id": company.id,
                 "resulting_period_id": period.id,
                 "resulting_document_id": document.id,
                 "resulting_analysis_id": analysis.id if analysis else None,
-            })
+            }
 
         batch = db.get(BulkUploadBatch, batch_id)
         confirmed_at = datetime.now(timezone.utc)
@@ -1289,7 +1674,7 @@ def _write_confirmed_records(
         batch=batch,
         confirmed_at=confirmed_at,
         counts=counts,
-        item_results=item_results,
+        item_results=[item_results_by_id[plan.item_id] for plan in plans],
     )
 
 

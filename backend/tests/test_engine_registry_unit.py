@@ -172,40 +172,92 @@ def test_registry_finds_trial_balance_via_analysis_type_directly():
     assert isinstance(adapter, TrialBalanceEngineAdapter)
 
 
+# Milestone 4.2: Balance Sheet + Income Statement motorları eklendi --
+# aşağıdaki "kayıtlı" kümeler buna göre güncellendi. Yalnızca henüz
+# implemente edilmemiş türler (cash_flow_statement -- 4.4; corporate/
+# temporary_tax_return -- 4.5) hâlâ None dönmeli.
+_REGISTERED_DETECTED_TYPES = frozenset({
+    DetectedDocumentType.TRIAL_BALANCE,
+    DetectedDocumentType.BALANCE_SHEET,
+    DetectedDocumentType.INCOME_STATEMENT,
+})
+_REGISTERED_DOCUMENT_TYPES = frozenset({
+    DocumentType.TRIAL_BALANCE,
+    DocumentType.BALANCE_SHEET,
+    DocumentType.INCOME_STATEMENT,
+})
+_REGISTERED_ANALYSIS_TYPES = frozenset({
+    AnalysisType.TRIAL_BALANCE,
+    AnalysisType.BALANCE_SHEET,
+    AnalysisType.INCOME_STATEMENT,
+})
+
+
+def test_registry_finds_balance_sheet_via_detected_type():
+    adapter = get_engine_for_detected_type(DetectedDocumentType.BALANCE_SHEET)
+    assert adapter is not None
+    assert adapter.analysis_type == AnalysisType.BALANCE_SHEET
+    assert adapter.requires_content is True
+
+
+def test_registry_finds_income_statement_via_detected_type():
+    adapter = get_engine_for_detected_type(DetectedDocumentType.INCOME_STATEMENT)
+    assert adapter is not None
+    assert adapter.analysis_type == AnalysisType.INCOME_STATEMENT
+    assert adapter.requires_content is True
+
+
+def test_registry_finds_balance_sheet_via_document_type():
+    adapter = get_engine_for_document_type(DocumentType.BALANCE_SHEET)
+    assert adapter is not None
+    assert adapter.analysis_type == AnalysisType.BALANCE_SHEET
+
+
+def test_registry_finds_income_statement_via_document_type():
+    adapter = get_engine_for_document_type(DocumentType.INCOME_STATEMENT)
+    assert adapter is not None
+    assert adapter.analysis_type == AnalysisType.INCOME_STATEMENT
+
+
 def test_registry_returns_none_for_unregistered_detected_types():
-    # Milestone 4.1'de trial_balance DIŞINDA hiçbir DetectedDocumentType
-    # kayıtlı değil -- 4.2/4.4/4.5 doldurana kadar hepsi güvenle None
-    # dönmeli.
+    # Milestone 4.2 itibarıyla yalnızca trial_balance/balance_sheet/
+    # income_statement kayıtlı -- geri kalanı (cash_flow_statement,
+    # corporate/temporary_tax_return, unknown) 4.4/4.5 doldurana kadar
+    # güvenle None dönmeli.
     for detected_type in DetectedDocumentType:
-        if detected_type == DetectedDocumentType.TRIAL_BALANCE:
+        if detected_type in _REGISTERED_DETECTED_TYPES:
             continue
         assert get_engine_for_detected_type(detected_type) is None, detected_type
 
 
 def test_registry_returns_none_for_unregistered_document_types():
     for document_type in DocumentType:
-        if document_type == DocumentType.TRIAL_BALANCE:
+        if document_type in _REGISTERED_DOCUMENT_TYPES:
             continue
         assert get_engine_for_document_type(document_type) is None, document_type
 
 
 def test_registry_returns_none_for_unregistered_analysis_types():
     for analysis_type in AnalysisType:
-        if analysis_type == AnalysisType.TRIAL_BALANCE:
+        if analysis_type in _REGISTERED_ANALYSIS_TYPES:
             continue
         assert get_engine_for_analysis_type(analysis_type) is None, analysis_type
 
 
-# --- Kapsam sınırı koruması: registry, üretim dispatch'ine BAĞLI DEĞİL ----
+# --- Kapsam sınırı: registry Milestone 4.2'de bulk_upload.py'ye BAĞLANDI,
+# ama tek-dosya trial_balance-only genel yükleme akışı (trial_balance_
+# upload.py) BİLEREK dokunulmadan kaldı (onaylanan Milestone 4.2 kararı #4/
+# #10 kapsam dışı listesi) -------------------------------------------------
 
 
-def test_registry_not_wired_into_bulk_upload_service():
+def test_registry_now_wired_into_bulk_upload_service():
     """
-    Onaylanan Milestone 4.1 kararı #1: registry, bu adımda
-    app/services/bulk_upload.py'nin gerçek dispatch akışına BAĞLANMADI.
-    Bu test, o kararın gelecekte (4.2 öncesi) yanlışlıkla ihlal
-    edilmediğini -- app/services/bulk_upload.py'nin app.engines paketinden
-    HİÇBİR ŞEY import etmediğini -- kaynak metni okuyarak doğrular.
+    Milestone 4.1'deki 'registry henüz gerçek dispatch'e bağlanmadı' kısıtı
+    Milestone 4.2'de KASITLI olarak kaldırıldı (onaylanan karar #5/#7/#8) --
+    app/services/bulk_upload.py artık app.engines.registry üzerinden gerçek
+    motor dispatch'i yapıyor. Bu test, o değişikliğin BEKLENEN/belgelenen
+    bir değişiklik olduğunu doğrular (aksi -- yanlışlıkla geri alınması --
+    bu testin kendisini kırar).
     """
 
     import pathlib
@@ -214,15 +266,19 @@ def test_registry_not_wired_into_bulk_upload_service():
         pathlib.Path(__file__).parent.parent / "app" / "services" / "bulk_upload.py"
     )
     source = bulk_upload_path.read_text(encoding="utf-8")
-    assert "app.engines" not in source, (
-        "app/services/bulk_upload.py artik app.engines'i import ediyor -- "
-        "bu, Milestone 4.1'in 'registry henuz gercek dispatch'e baglanmadi' "
-        "kararinin degistigi anlamina gelir. Eger bu kasitliyse (Milestone "
-        "4.2), bu testin kendisi de güncellenmeli/kaldirilmali."
-    )
+    assert "from app.engines.registry import get_engine_for_detected_type" in source
+    assert "from app.engines.protocol import EngineRunContext, EngineRunResult" in source
 
 
 def test_trial_balance_upload_service_not_wired_to_registry():
+    """
+    Onaylanan Milestone 4.2 kararı #4/#10: tek-dosya, yalnızca-trial_balance
+    genel yükleme akışı (app/services/trial_balance_upload.py) bu
+    milestone'un KAPSAMI DIŞINDA -- app.engines'ten hiçbir şey import
+    ETMEMELİ (bulk_upload.py'nin aksine, hâlâ mevcut analyze_trial_balance'ı
+    doğrudan çağırıyor).
+    """
+
     import pathlib
 
     path = (

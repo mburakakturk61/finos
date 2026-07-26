@@ -356,6 +356,156 @@ pytest tests/test_engine_registry_unit.py tests/test_chart_of_accounts_parity.py
   tests/test_financial_analysis_result_sources_postgres_integration.py -v
 ```
 
+## 6. Milestone 4.2: Balance Sheet + Income Statement Engine
+
+Bu adım Milestone 4.1'in altyapısı üzerine İKİ gerçek motor ekledi
+(`app/engines/balance_sheet/**`, `app/engines/income_statement/**`,
+paylaşılan yardımcılar `app/engines/common/**`de) ve registry'yi
+`app/services/bulk_upload.py`'nin GERÇEK confirm dispatch akışına bağladı
+(Milestone 4.1'deki "henüz bağlanmadı" kısıtı bilinçli olarak kaldırıldı).
+
+### Yeni sentetik fixture'lar (`tests/data/synthetic/`)
+
+`generate_fixtures.py`'ye eklenen fonksiyonlarla üretildi, tamamen kurgusal:
+
+- `synthetic_balance_sheet_direct.xlsx` / `synthetic_income_statement_direct.xlsx`
+  (EBIT satırı YOK) / `synthetic_income_statement_with_ebit.xlsx`: etiketli
+  (Kalem/Tutar) doğrudan-belge extractor'ının `.xlsx` yolunu test eder.
+- `synthetic_balance_sheet_labeled.pdf` / `synthetic_income_statement_labeled.pdf`
+  (EBIT yok) / `synthetic_income_statement_with_ebit_labeled.pdf`: AYNI
+  içerik, metin tabanlı PDF yolunu test eder (mevcut, sınıflandırma amaçlı
+  `synthetic_balance_sheet.pdf`/`synthetic_income_statement.pdf` fixture'larına
+  DOKUNULMADI -- onlar hâlâ Milestone 2 sınıflandırma testlerinde kullanılıyor,
+  gerçek finansal kalem içermiyor).
+- `synthetic_trial_balance_matched_bs_is.xlsx`: yukarıdaki `_direct` xlsx
+  fixture'larıyla BİREBİR aynı toplamlara türeyen, dengeli (borç=alacak) bir
+  mizan -- reconciliation'ın "within_tolerance=True" pozitif yolunu ve
+  aynı-batch trial_balance+BS/IS senaryolarını gerçek veriyle test etmek
+  için. Tüm extraction/analiz sonuçları gerçek kod çalıştırılarak elle
+  doğrulandı (bkz. aşağıdaki "gerçekten çalıştırılan testler").
+
+### Yeni test dosyaları
+
+- `test_engine_balance_income_statement_unit.py` (sqlalchemy'siz, GERÇEKTEN
+  çalıştırıldı): extractor'ların (.xlsx + PDF, her iki motor) gerçek
+  fixture'lardan doğru alanları çıkardığını; sanitize edilmiş hata
+  mesajlarını (desteklenmeyen tür, bozuk dosya -- ham exception hiçbir zaman
+  sızmaz); EBIT politikasını (`operating_profit` asla `ebit`'e sessizce
+  kopyalanmaz, yalnızca doğrudan raporlandıysa dolar, aksi halde
+  `EBIT_NOT_DETERMINABLE` warning'i); EBITDA'nın yalnızca hem `ebit` hem
+  `depreciation_and_amortization` doluyken hesaplandığını;
+  `trial_balance_fallback`'in "hiç hesap yok" (boş `account_details`) ile
+  "gerçekten sıfır" durumunu ayırt ettiğini (0 DEĞİL, `None`); iki-seviyeli
+  reconciliation toleransının üç bandını (yuvarlama -> sessiz, ara ->
+  `warning`/`RECONCILIATION_DIFFERENCE`, üst -> `high`/
+  `MATERIAL_RECONCILIATION_DIFFERENCE`) ve referans=0 iken sıfıra bölme
+  olmadığını; vertical/horizontal/working-capital/structural-ratio
+  analizlerinin eksik girdide `None` + doğru provenance ürettiğini; ve tam
+  servis orkestrasyonunun (`analyze_balance_sheet`/`analyze_income_statement`)
+  hem temiz reconciliation hem materyal fark hem trial_balance-fallback hem
+  "hiçbir kaynak yok -> FAILED" yollarını GERÇEK fixture'larla ve GERÇEK
+  (mock değil) `analyze_trial_balance` çağrısıyla doğru şekilde ürettiğini
+  kapsar.
+- `test_engine_registry_unit.py` (güncellendi): Balance Sheet/Income
+  Statement'ın registry'de kayıtlı olduğu (hem `DetectedDocumentType` hem
+  `DocumentType` üzerinden), kayıtsız kalan türlerin (cash_flow_statement,
+  corporate/temporary_tax_return -- 4.4/4.5'i bekliyor) hâlâ güvenle `None`
+  döndüğü, ve registry'nin ARTIK `app/services/bulk_upload.py`'ye bağlı
+  OLDUĞU (Milestone 4.1'in aksi yöndeki testi güncellendi/tersine çevrildi)
+  eklendi -- `app/services/trial_balance_upload.py`'nin (kapsam dışı) hâlâ
+  `app.engines`'e dokunmadığı testi AYNEN korundu.
+- `test_canonical_facts_unit.py` (küçük ek): `BalanceSheetFacts`'ın yeni 4
+  alanının (`cash_and_equivalents`/`inventory`/`trade_receivables`/
+  `trade_payables`) da diğerleri gibi `Decimal | None` ve varsayılan `None`
+  olduğu.
+- `test_bulk_upload_confirm_bs_is_integration.py` (sqlalchemy/fastapi
+  gerektirir, bu sandbox'ta ÇALIŞTIRILAMADI -- yalnızca py_compile +
+  elle çapraz kontrol): onaylanan Milestone 4.2 kararı #5'teki senaryo
+  listesinin API-seviyeli karşılığı -- aynı-batch trial_balance+balance_sheet
+  birlikte onaylanması (BS `source_mode=direct_document` kalır, trial_balance
+  yalnızca `role=supporting_analysis` olarak eklenir); aynı-batch'te
+  tanınamayan bir BS belgesi + başarılı trial_balance ->
+  `source_mode=trial_balance_derived`, `role=trial_balance_fallback`;
+  batch'ler ARASI (aynı-batch DEĞİL) bir Balance Sheet'in DB'deki ÖNCEDEN
+  var olan COMPLETED trial_balance sonucunu kaynak göstermesi; HER İKİ
+  durumda da `financial_analysis_result_sources.source_analysis_result_id`'nin
+  GERÇEK, FAZ 3'te üretilmiş id'ye işaret ettiği (sahte/uydurma bir UUID
+  DEĞİL, doğrudan DB'den `db_session` ile sorgulanarak doğrulandı); batch
+  ortasında bir income_statement item'ı `ENGINE_FAILED` dönerse (trial_balance
+  fallback'i de yoksa) trial_balance dahil HİÇBİR şeyin yazılmadığı
+  (tüm-ya-da-hiçbiri korunuyor); ve doğrudan bir gelir tablosunun
+  `EBIT_NOT_DETERMINABLE` uyarısını API yanıtında doğru sızdırdığı.
+
+### Registry artık gerçek dispatch'e BAĞLI (Milestone 4.1'in tersine kararı)
+
+`app/engines/registry.py` içindeki `TrialBalanceEngineAdapter`/
+`BalanceSheetEngineAdapter`/`IncomeStatementEngineAdapter`'ın ÜÇÜ de artık
+`app/services/bulk_upload.py`'nin `_run_confirm_analyses`/
+`_write_confirmed_records`'ı tarafından GERÇEKTEN çağrılıyor --
+`CONTENT_REQUIRED_DETECTED_TYPES` sabit kümesi kaldırıldı, yerine
+`_requires_content()` (registry lookup) geldi. trial_balance'ın davranışının
+BİREBİR AYNI kaldığı, mevcut `test_bulk_upload_api.py`'deki TÜM trial_balance
+confirm testlerinin (happy path, reuse, engine failure, duplicate, vb.)
+hiçbir değişiklik gerektirmeden geçmeye devam etmesiyle kanıtlanmıştır --
+`TrialBalanceEngineAdapter` artık `analyze_trial_balance`'ı DOĞRUDAN değil
+registry üzerinden çağırıyor olsa da, sarma mantığı (aynı `content`/
+`filename`, aynı dönüş şekli) DEĞİŞMEDİ.
+
+### Aynı-batch dependency-aware orkestrasyon (onaylanan karar #5)
+
+`_run_confirm_analyses` (FAZ 2) artık trial_balance türündeki item'ları ÖNCE
+çalıştırıp başarılı sonuçlarını `identity_key` (VKN veya company_id +
+yıl/dönem türü/dönem no -- gerçek DB id'si YOK, çünkü `mode="new"` bir
+firma/dönem FAZ 3'e kadar var olmayabilir) ile anahtarlanan bir bellek-içi
+haritada tutuyor. Aynı batch'teki Balance Sheet/Income Statement item'ları
+eşleşen bir identity_key bulursa `context.trial_balance_pending_in_batch=True`
+ile bu sonucu tüketiyor -- motor `EngineRunResult.pending_trial_balance_
+source_role`'ü dolduruyor (sahte bir `analysis_result_id` ÜRETMEDEN). FAZ 3
+(`_write_confirmed_records`) plan'ları dependency-first sırayla (trial_balance
+ÖNCE, Python `sort()`'un stable olması sayesinde grup-içi orijinal sıra
+korunarak) yazıyor; bir trial_balance'ın `FinancialAnalysisResult`'ı flush
+edildiği AN, aynı identity_key'e sahip bekleyen `pending_trial_balance_
+source_role`'ler gerçek id ile çözülüp `FinancialAnalysisResultSource`
+satırına yazılıyor. Herhangi bir motor `ENGINE_FAILED` dönerse (FAZ 2'de)
+mevcut TÜM-YA-DA-HİÇBİRİ davranışı korunuyor -- FAZ 3'e hiç geçilmiyor.
+
+### `result_json` sözleşmesi (onaylanan karar #9)
+
+Her iki motor de ortak üst-seviye anahtarları üretir: `engine`,
+`engine_version`, `analysis_type`, `source_mode`, `facts`,
+`vertical_analysis`, `horizontal_analysis`, `reconciliation`, `warnings`,
+`missing_fields`, `calculation_provenance` (+ Income Statement'a özgü
+`margins`, Balance Sheet'e özgü `working_capital`/
+`preliminary_structural_ratios`). `calculation_provenance`'daki her giriş
+`metric`/`formula`/`input_fields`/`missing_inputs`/`calculated` alanlarını
+taşır -- `calculated=False` iken `missing_inputs` HER ZAMAN doludur (Milestone
+4.2 sırasında `income_statement/analyzer.py::compute_margins`'de bulunan ve
+düzeltilen bir kusur: `missing_inputs` her zaman boş `()` yazılıyordu,
+`calculated=False` olsa bile -- artık hangi girdinin eksik olduğunu doğru
+raporluyor).
+
+### Bu sandbox'ın çalıştırma sınırlaması (yine değişmedi)
+
+Aynı kısıt geçerli: `sqlalchemy`/`fastapi`/`alembic`/`psycopg`/`pytest`/
+`httpx`/`pydantic`/`xlrd` bu sandbox'ta kurulu DEĞİL. `test_engine_balance_
+income_statement_unit.py` (`app/engines/**` gibi sqlalchemy'ye bağımlı
+OLMADIĞI için) `test_engine_registry_unit.py`/`test_chart_of_accounts_
+parity.py`/`test_canonical_facts_unit.py` ile birlikte sandbox-only
+`importlib` stub tekniğiyle GERÇEKTEN çalıştırıldı -- 4 dosya, TOPLAM 63
+test, 63 passed / 0 failed / 0 skipped. `test_bulk_upload_confirm_bs_is_
+integration.py` sqlalchemy/fastapi'ye bağımlı olduğu için bu sandbox'ta
+çalıştırılamadı -- yalnızca `py_compile` ile sözdizimi kontrolünden ve
+`test_bulk_upload_api.py`'deki mevcut confirm testi konvansiyonlarıyla elle
+çapraz kontrolden geçirildi. Yerelde gerçek bir yeşil koşu için:
+
+```
+docker compose up -d db
+cd backend
+pip install -r requirements.txt
+alembic upgrade head
+pytest tests/ -v
+```
+
 ## Bilinçli olarak yapılmayan bir şey
 
 `backend/tests/data/generic/2024_detay_mizan.xlsx` gerçek, anonimleştirilmemiş

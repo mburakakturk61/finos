@@ -56,17 +56,41 @@ class EngineRunContext:
     `prior_period_*` gibi alanlar Cash Flow Engine'in (Milestone 4.4) ihtiyaç
     duyacağı an, GERİYE UYUMLU (additive) şekilde eklenecek; şimdiden
     eklenmedi (YAGNI).
+
+    Milestone 4.2 (onaylanan karar #5) `company_id`/`period_id`'yi OPSİYONEL
+    yaptı: app.services.bulk_upload'ın FAZ 2 (bellek-içi, DB transaction'ı
+    açık değilken) dependency-aware orkestrasyonunda, firma/dönem için
+    `mode="new"` (henüz DB'de yaratılmamış) bir çözüm seçildiyse gerçek bir
+    UUID YOKTUR -- FAZ 3'e kadar (find-or-create) hiç var olmayabilir. Sahte
+    bir UUID ÜRETİLMEZ; bunun yerine bu alanlar `None` kalır. Şu anki hiçbir
+    adaptör (TrialBalance/BalanceSheet/IncomeStatement) bu alanları
+    KULLANMIYOR -- yalnızca ileride kimlik bağlamına ihtiyaç duyacak
+    motorlar (ör. Milestone 4.3 Financial Ratio Engine, FAZ 3 sonrası/DB
+    id'leri kesinleştikten sonra çalışacağı için) için hazır bir alan.
     """
 
-    company_id: uuid.UUID
-    period_id: uuid.UUID
+    company_id: uuid.UUID | None = None
+    period_id: uuid.UUID | None = None
     # O dönemin en güncel COMPLETED trial_balance analiz sonucunun
     # result_json'u (varsa) -- salt-okunur, motorun "doğrudan belge yoksa
     # trial_balance'tan türet" (source_mode=trial_balance_derived) yolunu
     # besler. Bu VERİ-seviyeli bir bağımlılıktır, app/trial_balance/**'e
     # KOD bağımlılığı değildir.
     trial_balance_result: dict | None = None
+    # `trial_balance_result` DB'de ZATEN KAYITLI bir sonuçtan geliyorsa
+    # (FAZ 1'de okunmuş) bu alan doludur -- motor `sources`'a doğrudan
+    # bir EngineSourceRef ekleyebilir. Milestone 4.2 (onaylanan karar #5):
+    # `trial_balance_result` AYNI confirm batch'inde, henüz DB'ye
+    # YAZILMAMIŞ bir trial_balance sonucundan geliyorsa bu alan `None`
+    # kalır VE `trial_balance_pending_in_batch=True` olur -- motor bu
+    # durumda gerçek bir `analysis_result_id` YOKTUR, sahte/uydurma bir
+    # kimlik ÜRETMEZ; bunun yerine `EngineRunResult.
+    # pending_trial_balance_source_role` alanını doldurur, gerçek kaynak
+    # satırı orkestratör (app/services/bulk_upload.py) tarafından FAZ 3'te,
+    # trial_balance'ın kendi FinancialAnalysisResult'ı flush edildikten
+    # SONRA oluşturulur.
     trial_balance_analysis_result_id: uuid.UUID | None = None
+    trial_balance_pending_in_batch: bool = False
 
 
 @dataclass
@@ -83,6 +107,15 @@ class EngineRunResult:
     error_message: str | None = None
     warnings: list[dict] = field(default_factory=list)
     sources: list[EngineSourceRef] = field(default_factory=list)
+    # Milestone 4.2 (onaylanan karar #5): motor, context.trial_balance_
+    # pending_in_batch=True olduğu için gerçek bir analysis_result_id
+    # ALAMADIĞI ama trial_balance verisini KULLANDIĞI durumda bu alanı
+    # doldurur (`trial_balance_fallback` veya `supporting_analysis`).
+    # Orkestratör, trial_balance'ın FinancialAnalysisResult'ı flush
+    # edildikten SONRA gerçek id ile bu rolü kullanarak
+    # FinancialAnalysisResultSource satırını oluşturur. `None` ise
+    # aynı-batch ertelenmiş bir kaynak YOK.
+    pending_trial_balance_source_role: AnalysisSourceRole | None = None
 
 
 @runtime_checkable
