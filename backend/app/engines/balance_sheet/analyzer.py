@@ -6,16 +6,26 @@ hesaplanabilen "ön izleme" yapısal oranlar.
 Bu oranlar Financial Ratio Engine'in (Milestone 4.3) NİHAİ, çapraz-tablo
 sonucunun YERİNE GEÇMEZ -- `result_json["preliminary_structural_ratios"]`
 altında AÇIKÇA "ön izleme" olarak etiketlenir (bkz. app/engines/balance_sheet/
-service.py). Formüller `app.engines.common.ratio_formulas.safe_divide`
-(4.1) üzerinden -- tek formül kaynağı, iki yerde ayrı "current_ratio"
-tanımı yok.
+service.py). `result_json` ŞEKLİ (anahtar adları) Milestone 4.3A'da
+DEĞİŞMEDİ -- yalnızca iç hesaplama kaynağı merkezileşti.
+
+Milestone 4.3A (Ratio Calculation Foundation, onaylanan mimari doküman
+Bölüm D.2 Karar 1/2, R.5 madde 10): `compute_preliminary_structural_ratios`
+ve `compute_working_capital` artık KENDİ Decimal aritmetiğini YAPMIYOR --
+`app.engines.common.ratio_formulas.compute_registered_ratio()`'ya
+yönlendiriliyor (current_ratio/debt_ratio/equity_ratio/debt_to_equity/
+net_working_capital/working_capital_ratio, RATIO_REGISTRY'de kayıtlı TEK
+formül kaynağından okunuyor). Üretilen sayısal DEĞERLER Milestone 4.2'deki
+`safe_divide` tabanlı eski hesaplamayla BİT-BİR AYNIDIR (bkz.
+tests/test_ratio_formulas_unit.py'deki D.3 invariant testleri).
 """
 
 from decimal import Decimal
 
 from app.engines.common.calculation_provenance import ProvenanceEntry
 from app.engines.common.canonical_facts import BalanceSheetFacts
-from app.engines.common.ratio_formulas import safe_divide
+from app.engines.common.ratio_derived_facts import compute_total_liabilities
+from app.engines.common.ratio_formulas import compute_registered_ratio, safe_divide
 
 
 VERTICAL_FIELDS = [
@@ -109,92 +119,67 @@ def compute_horizontal_analysis(
     return result, provenance
 
 
+def _build_structural_facts_dict(facts: BalanceSheetFacts) -> dict[str, Decimal | None]:
+    """
+    `BalanceSheetFacts` -> `compute_registered_ratio()`'nun beklediği düz
+    (flat) `dict[str, Decimal | None]` şekli. `total_liabilities`, TEK
+    üretim noktası olan `ratio_derived_facts.compute_total_liabilities()`
+    üzerinden türetilir (Milestone 4.3A, D.2 Karar 1) -- bu fonksiyonun
+    kendisi artık short_term/long_term toplamını YENİDEN YAZMAZ.
+    """
+    return {
+        "current_assets": facts.current_assets,
+        "short_term_liabilities": facts.short_term_liabilities,
+        "long_term_liabilities": facts.long_term_liabilities,
+        "total_assets": facts.total_assets,
+        "equity": facts.equity,
+        "total_liabilities": compute_total_liabilities(
+            facts.short_term_liabilities, facts.long_term_liabilities
+        ),
+    }
+
+
 def compute_working_capital(
     facts: BalanceSheetFacts,
 ) -> tuple[dict[str, Decimal | None], list[ProvenanceEntry]]:
-    missing = []
-    if facts.current_assets is None:
-        missing.append("current_assets")
-    if facts.short_term_liabilities is None:
-        missing.append("short_term_liabilities")
+    """
+    Milestone 4.3A: `net_working_capital`/`working_capital_ratio` artık
+    RATIO_REGISTRY'ye kayıtlı, `compute_registered_ratio()` üzerinden
+    hesaplanıyor -- `result_json["working_capital"]` şekli (iki anahtar)
+    DEĞİŞMEDİ.
+    """
+    facts_dict = _build_structural_facts_dict(facts)
 
-    net_working_capital = (
-        facts.current_assets - facts.short_term_liabilities if not missing else None
-    )
-    working_capital_ratio = safe_divide(facts.current_assets, facts.short_term_liabilities)
+    result: dict[str, Decimal | None] = {}
+    provenance: list[ProvenanceEntry] = []
+    for key in ("net_working_capital", "working_capital_ratio"):
+        outcome = compute_registered_ratio(key, facts_dict)
+        result[key] = outcome.value
+        if outcome.provenance is not None:
+            provenance.append(outcome.provenance)
 
-    provenance = [
-        ProvenanceEntry(
-            metric="net_working_capital",
-            derivation_rule="current_assets - short_term_liabilities",
-            input_fields=("current_assets", "short_term_liabilities"),
-            missing_inputs=tuple(missing),
-            calculated=net_working_capital is not None,
-        ),
-        ProvenanceEntry(
-            metric="working_capital_ratio",
-            derivation_rule="current_assets / short_term_liabilities",
-            input_fields=("current_assets", "short_term_liabilities"),
-            missing_inputs=tuple(missing),
-            calculated=working_capital_ratio is not None,
-        ),
-    ]
-
-    return {
-        "net_working_capital": net_working_capital,
-        "working_capital_ratio": working_capital_ratio,
-    }, provenance
+    return result, provenance
 
 
 def compute_preliminary_structural_ratios(
     facts: BalanceSheetFacts,
 ) -> tuple[dict[str, Decimal | None], list[ProvenanceEntry]]:
-    total_liabilities = None
-    total_liabilities_missing: tuple[str, ...] = ()
-    if facts.short_term_liabilities is not None and facts.long_term_liabilities is not None:
-        total_liabilities = facts.short_term_liabilities + facts.long_term_liabilities
-    else:
-        total_liabilities_missing = ("short_term_liabilities", "long_term_liabilities")
+    """
+    Milestone 4.3A: `current_ratio`/`debt_ratio`/`equity_ratio`/
+    `debt_to_equity` artık RATIO_REGISTRY'ye kayıtlı, tek formül
+    kaynağından (`compute_registered_ratio`) hesaplanıyor --
+    `result_json["preliminary_structural_ratios"]` şekli (dört anahtar)
+    DEĞİŞMEDİ. Üretilen değerler Milestone 4.2'deki `safe_divide` tabanlı
+    hesaplamayla bit-bir aynıdır.
+    """
+    facts_dict = _build_structural_facts_dict(facts)
 
-    current_ratio = safe_divide(facts.current_assets, facts.short_term_liabilities)
-    debt_ratio = safe_divide(total_liabilities, facts.total_assets)
-    equity_ratio = safe_divide(facts.equity, facts.total_assets)
-    debt_to_equity = safe_divide(total_liabilities, facts.equity)
+    result: dict[str, Decimal | None] = {}
+    provenance: list[ProvenanceEntry] = []
+    for key in ("current_ratio", "debt_ratio", "equity_ratio", "debt_to_equity"):
+        outcome = compute_registered_ratio(key, facts_dict)
+        result[key] = outcome.value
+        if outcome.provenance is not None:
+            provenance.append(outcome.provenance)
 
-    provenance = [
-        ProvenanceEntry(
-            "current_ratio",
-            "current_assets / short_term_liabilities",
-            ("current_assets", "short_term_liabilities"),
-            (),
-            current_ratio is not None,
-        ),
-        ProvenanceEntry(
-            "debt_ratio",
-            "(short_term_liabilities + long_term_liabilities) / total_assets",
-            ("short_term_liabilities", "long_term_liabilities", "total_assets"),
-            total_liabilities_missing if debt_ratio is None else (),
-            debt_ratio is not None,
-        ),
-        ProvenanceEntry(
-            "equity_ratio",
-            "equity / total_assets",
-            ("equity", "total_assets"),
-            (),
-            equity_ratio is not None,
-        ),
-        ProvenanceEntry(
-            "debt_to_equity",
-            "(short_term_liabilities + long_term_liabilities) / equity",
-            ("short_term_liabilities", "long_term_liabilities", "equity"),
-            total_liabilities_missing if debt_to_equity is None else (),
-            debt_to_equity is not None,
-        ),
-    ]
-
-    return {
-        "current_ratio": current_ratio,
-        "debt_ratio": debt_ratio,
-        "equity_ratio": equity_ratio,
-        "debt_to_equity": debt_to_equity,
-    }, provenance
+    return result, provenance

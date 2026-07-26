@@ -186,10 +186,16 @@ _REGISTERED_DOCUMENT_TYPES = frozenset({
     DocumentType.BALANCE_SHEET,
     DocumentType.INCOME_STATEMENT,
 })
+# Milestone 4.3A: AnalysisType.FINANCIAL_RATIOS eklendi -- ama YALNIZCA bu
+# kümeye (get_engine_for_analysis_type doğrudan erişimi). _REGISTERED_
+# DETECTED_TYPES/_REGISTERED_DOCUMENT_TYPES BİLİNÇLİ OLARAK DEĞİŞMEDİ --
+# Financial Ratio Engine hiçbir zaman bir "yüklenen belge"nin sınıflandırma
+# sonucu olarak tetiklenmez (onaylanan mimari doküman Bölüm B.10).
 _REGISTERED_ANALYSIS_TYPES = frozenset({
     AnalysisType.TRIAL_BALANCE,
     AnalysisType.BALANCE_SHEET,
     AnalysisType.INCOME_STATEMENT,
+    AnalysisType.FINANCIAL_RATIOS,
 })
 
 
@@ -235,6 +241,34 @@ def test_registry_returns_none_for_unregistered_document_types():
         if document_type in _REGISTERED_DOCUMENT_TYPES:
             continue
         assert get_engine_for_document_type(document_type) is None, document_type
+
+
+def test_registry_finds_financial_ratios_via_analysis_type_directly():
+    """
+    Milestone 4.3A: FinancialRatioEngineAdapter registry'de kayıtlı --
+    yalnızca get_engine_for_analysis_type üzerinden (bkz. B.10). requires_
+    content=False (Ratio Engine hiçbir belge ayrıştırmaz, yalnızca başka
+    analiz sonuçlarını okur).
+    """
+    adapter = get_engine_for_analysis_type(AnalysisType.FINANCIAL_RATIOS)
+    assert adapter is not None
+    assert adapter.analysis_type == AnalysisType.FINANCIAL_RATIOS
+    assert adapter.requires_content is False
+
+
+def test_registry_financial_ratios_not_reachable_via_detected_or_document_type():
+    """
+    Onaylanan Milestone 4.3A/mimari doküman kararı (B.10): Financial Ratio
+    Engine hiçbir zaman bir "yüklenen belge"nin sınıflandırma sonucu olarak
+    tetiklenmez -- DetectedDocumentType/DocumentType'ta hiç FINANCIAL_RATIOS
+    değeri YOK (bu enum'larda böyle bir üye tanımlı değil), bu yüzden bu iki
+    yönlendirme fonksiyonu üzerinden asla erişilemez. Bu test, ileride
+    yanlışlıkla bu tabloya eklenmesini DEĞİL, bugünkü tasarım kararının
+    (`_DETECTED_TYPE_TO_ANALYSIS_TYPE`/`_DOCUMENT_TYPE_TO_ANALYSIS_TYPE`'a
+    hiç eklenmediğinin) doğru belgelendiğini doğrular.
+    """
+    assert not hasattr(DetectedDocumentType, "FINANCIAL_RATIOS")
+    assert not hasattr(DocumentType, "FINANCIAL_RATIOS")
 
 
 def test_registry_returns_none_for_unregistered_analysis_types():

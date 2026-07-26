@@ -10,11 +10,12 @@ warning'i. `ebitda` yalnızca `ebit` VE `depreciation_and_amortization` İKİSİ
 DE doluysa hesaplanır.
 """
 
+import dataclasses
 from decimal import Decimal
 
 from app.engines.common.calculation_provenance import ProvenanceEntry
 from app.engines.common.canonical_facts import IncomeStatementFacts
-from app.engines.common.ratio_formulas import safe_divide
+from app.engines.common.ratio_formulas import compute_registered_ratio, safe_divide
 
 
 EBIT_NOT_DETERMINABLE_CODE = "EBIT_NOT_DETERMINABLE"
@@ -96,23 +97,44 @@ def resolve_ebitda(
 def compute_margins(
     facts: IncomeStatementFacts, ebit: Decimal | None, ebitda: Decimal | None
 ) -> tuple[dict[str, Decimal | None], list[ProvenanceEntry]]:
+    """
+    Milestone 4.3A (onaylanan mimari doküman Bölüm D.2 Karar 1/2, R.5 madde
+    10): `gross_margin_pct`/`operating_margin_pct`/`net_margin_pct` artık
+    RATIO_REGISTRY'ye kayıtlı (`gross_profit_margin`/`operating_profit_margin`/
+    `net_profit_margin`), `compute_registered_ratio()` üzerinden hesaplanıyor
+    -- üretilen sayısal değerler Milestone 4.2'deki `safe_divide` tabanlı
+    hesaplamayla bit-bir aynıdır. `ebit_margin_pct`/`ebitda_margin_pct`
+    RATIO_REGISTRY'de HENÜZ kayıtlı DEĞİL (Milestone 4.3A yalnızca ilk 9
+    ortak oranı kapsıyor) -- bu ikisi eski yerel `safe_divide` hesaplamasını
+    KORUYOR. `result_json["margins"]` şekli (beş anahtar) DEĞİŞMEDİ.
+    """
     net_sales = facts.net_sales
 
-    gross_margin = safe_divide(facts.gross_profit, net_sales)
-    operating_margin = safe_divide(facts.operating_profit, net_sales)
+    facts_dict = {
+        "gross_profit": facts.gross_profit,
+        "operating_profit": facts.operating_profit,
+        "net_profit": facts.net_profit,
+        "net_sales": net_sales,
+    }
+
+    gross_outcome = compute_registered_ratio("gross_profit_margin", facts_dict)
+    operating_outcome = compute_registered_ratio("operating_profit_margin", facts_dict)
+    net_outcome = compute_registered_ratio("net_profit_margin", facts_dict)
+
+    # ebit_margin_pct / ebitda_margin_pct: RATIO_REGISTRY'de HENÜZ kayıtlı
+    # değil -- eski yerel hesaplama KORUNUYOR (bkz. fonksiyon docstring'i).
     ebit_margin = safe_divide(ebit, net_sales)
     ebitda_margin = safe_divide(ebitda, net_sales)
-    net_margin = safe_divide(facts.net_profit, net_sales)
 
     def _pct(value: Decimal | None) -> Decimal | None:
         return value * Decimal("100") if value is not None else None
 
     margins = {
-        "gross_margin_pct": _pct(gross_margin),
-        "operating_margin_pct": _pct(operating_margin),
+        "gross_margin_pct": gross_outcome.value,
+        "operating_margin_pct": operating_outcome.value,
         "ebit_margin_pct": _pct(ebit_margin),
         "ebitda_margin_pct": _pct(ebitda_margin),
-        "net_margin_pct": _pct(net_margin),
+        "net_margin_pct": net_outcome.value,
     }
 
     def _missing(numerator_name: str, numerator_value: Decimal | None) -> tuple[str, ...]:
@@ -126,22 +148,27 @@ def compute_margins(
             missing.append("net_sales")
         return tuple(missing)
 
+    # compute_registered_ratio'nun ürettiği ProvenanceEntry.metric, RATIO_
+    # REGISTRY anahtarını (ör. "gross_profit_margin") taşır -- bu fonksiyonun
+    # YEREL alan adıyla (ör. "gross_margin_pct") eşleşmesi için dataclasses.
+    # replace ile yeniden adlandırılır (result_json["margins"] şeklinin
+    # AYNI kalması, Milestone 4.3A onayı madde 5).
+    gross_provenance = dataclasses.replace(gross_outcome.provenance, metric="gross_margin_pct")
+    operating_provenance = dataclasses.replace(
+        operating_outcome.provenance, metric="operating_margin_pct"
+    )
+    net_provenance = dataclasses.replace(net_outcome.provenance, metric="net_margin_pct")
+
     provenance = [
-        ProvenanceEntry("gross_margin_pct", "gross_profit / net_sales * 100",
-                         ("gross_profit", "net_sales"), _missing("gross_profit", facts.gross_profit),
-                         margins["gross_margin_pct"] is not None),
-        ProvenanceEntry("operating_margin_pct", "operating_profit / net_sales * 100",
-                         ("operating_profit", "net_sales"), _missing("operating_profit", facts.operating_profit),
-                         margins["operating_margin_pct"] is not None),
+        gross_provenance,
+        operating_provenance,
         ProvenanceEntry("ebit_margin_pct", "ebit / net_sales * 100",
                          ("ebit", "net_sales"), _missing("ebit", ebit),
                          margins["ebit_margin_pct"] is not None),
         ProvenanceEntry("ebitda_margin_pct", "ebitda / net_sales * 100",
                          ("ebitda", "net_sales"), _missing("ebitda", ebitda),
                          margins["ebitda_margin_pct"] is not None),
-        ProvenanceEntry("net_margin_pct", "net_profit / net_sales * 100",
-                         ("net_profit", "net_sales"), _missing("net_profit", facts.net_profit),
-                         margins["net_margin_pct"] is not None),
+        net_provenance,
     ]
 
     return margins, provenance

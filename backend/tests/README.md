@@ -506,6 +506,138 @@ alembic upgrade head
 pytest tests/ -v
 ```
 
+## 7. Milestone 4.3A: Ratio Calculation Foundation
+
+Bu adım Financial Ratio Engine'in (Milestone 4.3) yalnızca temel altyapısını
+kurdu -- calculation strategy dispatch sistemi, computation status
+sözleşmesi, ilk 9 ortak oranın merkezi kaydı (current_ratio/
+working_capital_ratio/net_working_capital/debt_ratio/equity_ratio/
+debt_to_equity/gross_profit_margin/operating_profit_margin/
+net_profit_margin) ve Balance Sheet/Income Statement motorlarının bu
+merkezi kaynağa yönlendirilmesi. Tam kapsam ve gerekçe için bkz.
+`docs/FINOS_MILESTONE_4_3_FINANCIAL_RATIO_ENGINE_DESIGN.md` (Bölüm R/S).
+
+**KESİN KAPSAM SINIRI:** benchmark/Health Score/Credit Score/Recommendation
+Engine implementasyonu YOK, migration YOK, `ratio_recompute.py` YOK,
+`app/services/bulk_upload.py`'ye HİÇBİR dokunuş YOK -- `FinancialRatioEngineAdapter`
+registry'de kayıtlı ama hiçbir gerçek akışa (API/bulk upload/recompute)
+bağlı DEĞİL, yalnızca izole/birim testleriyle çağrılabilir.
+
+### Değişen/yeni dosyalar
+
+- `app/engines/common/ratio_formulas.py` (BÜYÜK ÖLÇÜDE YENİDEN YAZILDI):
+  `ComputationStatus` enum (`calculated`/`missing_input`/
+  `undefined_zero_denominator`/`no_obligation`/`not_applicable`/
+  `not_calculable`), `ComputationOutcome` dataclass, KAPALI
+  `CALCULATION_STRATEGIES` sözlüğü (`"sum_division"`/`"linear_combination"`
+  -- eval/exec/dinamik expression YOK), `RatioFormulaMetadata`'nın revize
+  şekli, `compute_registered_ratio()` (tek giriş noktası), `json_safe_to_decimal`
+  (yeni), ilk 9 `RatioFormulaMetadata` kaydı. `safe_divide`/
+  `decimal_to_json_safe` DEĞİŞMEDİ.
+- `app/engines/common/calculation_provenance.py`: `ProvenanceEntry`'ye 3
+  additive alan (`source_analysis_result_ids`/`reliability`/
+  `rounding_applied`) -- `provenance_to_dict()` BİLİNÇLİ OLARAK
+  DEĞİŞTİRİLMEDİ (hâlâ 5 anahtar, BS/IS'in dış sözleşmesini korur), yeni
+  `provenance_to_dict_extended()` yalnızca Ratio Engine'in kendi
+  result_json'unda kullanılıyor.
+- `app/engines/common/ratio_derived_facts.py` (YENİ): `compute_total_liabilities`,
+  `compute_days_in_period` (gerçek tarih farkı birincil, `months_covered*30`
+  yalnızca açık düşük-güven fallback).
+- `app/engines/protocol.py`: `EngineRunContext`'e 4 additive alan
+  (`balance_sheet_result`/`income_statement_result`/`prior_period_balance_sheet_result`/
+  `prior_period_income_statement_result`).
+- `app/engines/financial_ratios/` (YENİ paket): `adapter.py`
+  (`FinancialRatioEngineAdapter` -- ilk 9 oranı hesaplar, hiçbir akışa
+  bağlı değil), `service.py` (`analyze_financial_ratios`).
+- `app/engines/registry.py`: `FinancialRatioEngineAdapter` yalnızca
+  `_ENGINE_BY_ANALYSIS_TYPE`'a eklendi -- `DetectedDocumentType`/
+  `DocumentType` yönlendirme tablolarına EKLENMEDİ (Ratio Engine bir
+  belge sınıflandırma sonucu olarak asla tetiklenmez).
+- `app/engines/balance_sheet/analyzer.py`: `compute_preliminary_structural_ratios`/
+  `compute_working_capital` artık `compute_registered_ratio()`'ya
+  yönlendiriliyor -- `result_json` şekli DEĞİŞMEDİ, sayısal değerler
+  Milestone 4.2 ile bit-bir aynı (bkz. aşağıdaki testler).
+- `app/engines/income_statement/analyzer.py`: `compute_margins`'in 3/5
+  alanı (`gross_margin_pct`/`operating_margin_pct`/`net_margin_pct`) aynı
+  şekilde yönlendirildi; `ebit_margin_pct`/`ebitda_margin_pct` RATIO_REGISTRY'de
+  henüz kayıtlı olmadığı için eski yerel hesaplamayı KORUYOR.
+- `tests/test_ratio_formulas_unit.py` (YENİ, sqlalchemy'siz, GERÇEKTEN
+  çalıştırıldı): strateji fonksiyonlarının saf/kapalı olduğu; None-eksik ile
+  gerçek-sıfır (no_obligation/undefined_zero_denominator) ayrımı;
+  desteklenmeyen strateji ve bilinmeyen key'in kontrollü `not_calculable`
+  ürettiği (exception/Infinity/NaN YOK); ilk 9 oranın RATIO_REGISTRY
+  envanteri; bağımsız elle hesaplanmış golden dataset'e karşı bit-bir
+  eşleşme; BS/IS analyzer'larının merkezi registry ile (ve eski
+  `safe_divide` tabanlı hesaplamayla) bit-bir aynı sonucu ürettiği (D.3
+  invariant'ı); `provenance_to_dict()`'in hâlâ yalnızca 5 anahtar ürettiği;
+  `ratio_derived_facts`'in days_in_period kaynak önceliği; `FinancialRatioEngineAdapter`'ın
+  gerçek BS/IS fixture'larıyla doğru sonuç ürettiği VE hiçbir akışa bağlı
+  olmadığının kaynak-metni taramasıyla doğrulanması.
+- `tests/test_engine_registry_unit.py` (güncellendi): `AnalysisType.FINANCIAL_RATIOS`
+  artık `get_engine_for_analysis_type` üzerinden kayıtlı (yeni pozitif
+  test + `_REGISTERED_ANALYSIS_TYPES` güncellemesi) -- `_REGISTERED_DETECTED_TYPES`/
+  `_REGISTERED_DOCUMENT_TYPES` BİLİNÇLİ OLARAK DEĞİŞMEDİ.
+
+### Merkezi formül sözleşmesinin nihai şekli
+
+`RatioFormulaMetadata(key, category, display_name_tr, unit,
+calculation_strategy, numerator_fields=(), denominator_fields=(),
+addend_fields=(), subtrahend_fields=(),
+zero_denominator_status=UNDEFINED_ZERO_DENOMINATOR, quantize_exp="0.0001")`.
+İki strateji: `"sum_division"` (topla+böl, `safe_divide` ile bit-bir aynı
+quantize/percentage davranışı) ve `"linear_combination"` (topla-çıkar,
+quantize yok). `compute_registered_ratio(key, facts, *, reliability="high")
+-> ComputationOutcome(status, value, missing_inputs, warnings, reliability,
+provenance)` -- TEK giriş noktası.
+
+### Sıfır payda / eksik veri davranışı (somut örnekler)
+
+`current_ratio`, `short_term_liabilities=None` iken -> `missing_input`.
+`current_ratio`, `short_term_liabilities=Decimal("0")` (gerçek sıfır) iken
+-> `no_obligation` (value=None, warning YOK -- olumlu/nötr durum).
+`debt_to_equity`, `equity=Decimal("0")` iken -> `undefined_zero_denominator`
+(value=None, `severity="high"` warning VAR). Hiçbir durumda
+`Decimal("Infinity")`/`NaN` üretilmedi (`test_no_strategy_ever_produces_infinity_or_nan`
+ile battery test edildi).
+
+### Gerçekten çalıştırılan testler ve regresyon sonucu
+
+Sandbox-only `importlib` stub tekniğiyle (bkz. yukarıdaki "Bu sandbox'ın
+çalıştırma sınırlaması" bölümleri) GERÇEKTEN çalıştırıldı:
+
+```
+tests/test_ratio_formulas_unit.py            (YENİ, 41 test)
+tests/test_engine_balance_income_statement_unit.py  (DEĞİŞMEDİ, 31 test)
+tests/test_engine_registry_unit.py           (güncellendi, 22 test -- +2 yeni)
+tests/test_canonical_facts_unit.py           (DEĞİŞMEDİ, 7 test)
+tests/test_chart_of_accounts_parity.py       (DEĞİŞMEDİ, 5 test)
+```
+
+**TOPLAM: 106 test, 106 passed, 0 failed, 0 skipped.** Bu, Milestone
+4.2 sonundaki 63 testlik temel çizgiye (bkz. yukarısı) göre net +43 test
+(+41 yeni, +2 registry güncellemesi) -- ve o 63 testin TAMAMI hiçbir
+değişiklik olmadan yeşil kalmaya devam ediyor (yalnızca
+`test_registry_returns_none_for_unregistered_analysis_types`'ın beklenen,
+gerekçeli güncellemesi -- bkz. yukarısı).
+
+`app/services/bulk_upload.py`/`app/trial_balance/**`/sqlalchemy-bağımlı
+diğer testler (`test_bulk_upload_confirm_bs_is_integration.py` vb.) bu
+adımda HİÇ DEĞİŞTİRİLMEDİ ve zaten önceki milestone'larda da bu sandbox'ta
+çalıştırılamıyordu (aynı `sqlalchemy`/`fastapi`/`pydantic` kısıtı, bkz.
+altta) -- yeniden çalıştırılmaya çalışılmadı, çünkü bu milestone'un kapsamı
+onları hiç etkilemedi. `app.classification.*` testleri de (bu adımın
+kapsamı dışında, dokunulmadı) yeniden koşulmadı.
+
+Yerelde gerçek bir yeşil koşu için:
+
+```
+docker compose up -d db
+cd backend
+pip install -r requirements.txt
+alembic upgrade head
+pytest tests/ -v
+```
+
 ## Bilinçli olarak yapılmayan bir şey
 
 `backend/tests/data/generic/2024_detay_mizan.xlsx` gerçek, anonimleştirilmemiş

@@ -29,6 +29,7 @@ testleriyle kanıtlanmıştır (bkz. tests/README.md).
 from __future__ import annotations
 
 from app.engines.balance_sheet.adapter import BalanceSheetEngineAdapter
+from app.engines.financial_ratios.adapter import FinancialRatioEngineAdapter
 from app.engines.income_statement.adapter import IncomeStatementEngineAdapter
 from app.engines.protocol import EngineAdapter, EngineRunContext, EngineRunResult
 from app.models.enums import (
@@ -90,12 +91,20 @@ class TrialBalanceEngineAdapter:
 
 
 # analysis_type -> adaptör. TEK doğruluk kaynağı. Milestone 4.2: Balance
-# Sheet/Income Statement eklendi (cash_flow/tax_return/financial_ratios
-# Milestone 4.3/4.4/4.5'i bekliyor, hâlâ kayıtlı DEĞİL).
+# Sheet/Income Statement eklendi. Milestone 4.3A: FinancialRatioEngineAdapter
+# eklendi (ilk 9 ortak oranı hesaplar) -- AMA yalnızca get_engine_for_
+# analysis_type üzerinden erişilebilir; DetectedDocumentType/DocumentType
+# yönlendirme tablolarına BİLİNÇLİ OLARAK eklenmedi (bkz. aşağısı, onaylanan
+# mimari doküman Bölüm B.10 -- Ratio Engine hiçbir zaman bir "yüklenen
+# belge"nin sınıflandırma sonucu olarak tetiklenmez). Bu adaptör Milestone
+# 4.3A'da HİÇBİR gerçek akışa (bulk upload, ratio_recompute) BAĞLI DEĞİL --
+# yalnızca izole çağrılabilir (cash_flow/tax_return Milestone 4.4/4.5'i
+# bekliyor, hâlâ kayıtlı DEĞİL).
 _ENGINE_BY_ANALYSIS_TYPE: dict[AnalysisType, EngineAdapter] = {
     AnalysisType.TRIAL_BALANCE: TrialBalanceEngineAdapter(),
     AnalysisType.BALANCE_SHEET: BalanceSheetEngineAdapter(),
     AnalysisType.INCOME_STATEMENT: IncomeStatementEngineAdapter(),
+    AnalysisType.FINANCIAL_RATIOS: FinancialRatioEngineAdapter(),
 }
 
 # DetectedDocumentType -> analysis_type. Milestone 4.2: balance_sheet/

@@ -92,6 +92,23 @@ class EngineRunContext:
     trial_balance_analysis_result_id: uuid.UUID | None = None
     trial_balance_pending_in_batch: bool = False
 
+    # Milestone 4.3A (Ratio Calculation Foundation, onaylanan mimari doküman
+    # Bölüm M.2) -- ADDITIVE, geriye uyumlu. Financial Ratio Engine'in aynı
+    # döneme ait Balance Sheet/Income Statement analiz sonuçlarına (ZATEN
+    # ÜRETİLMİŞ result_json'lar -- yeniden hesaplama YOK, B.3) erişimi için.
+    # Şu anki hiçbir adaptör (TrialBalance/BalanceSheet/IncomeStatement) bu
+    # alanları KULLANMIYOR/etkilenmiyor -- yalnızca FinancialRatioEngineAdapter
+    # (Milestone 4.3A'da eklendi, HİÇBİR akışa bağlı değil) okur.
+    balance_sheet_result: dict | None = None
+    income_statement_result: dict | None = None
+    # Büyüme oranları ve (Milestone 4.3B'de) ortalama-bakiye oranları için
+    # önceki dönemin BS/IS sonuçları -- Milestone 4.3A'nın 9 oranından
+    # HİÇBİRİ bunu TÜKETMİYOR, yalnızca ileriye dönük altyapı olarak
+    # ekleniyor (additive genişleme deseni, bkz. yukarıdaki trial_balance_*
+    # alanlarının aynı gerekçesi).
+    prior_period_balance_sheet_result: dict | None = None
+    prior_period_income_statement_result: dict | None = None
+
 
 @dataclass
 class EngineRunResult:
