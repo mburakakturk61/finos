@@ -816,6 +816,195 @@ YOK (kaynak-metin taramasıyla doğrulandı). Migration YOK. `ratio_
 recompute.py` YOK. Benchmark/Health Score/Credit Score/Recommendation
 Engine implementasyonu YOK.
 
+## 9. Milestone 4.3C: Benchmark Engine (saf, bağımsız değerlendirme kütüphanesi)
+
+Onaylanan tasarım dokümanı: `docs/FINOS_MILESTONE_4_3C_BENCHMARK_ENGINE_DESIGN.md`
+(2. tur onay, 9 bağlayıcı karar ile revize edildi). Bölüm 23'teki 8 adımlık
+plan AYNEN, sırayla, her adımın testleri tam yeşil olmadan bir sonrakine
+geçilmeden uygulandı.
+
+**Bağlayıcı sınır (aynen korundu):** bu milestone'da hiçbir migration,
+`AnalysisType` eklemesi, adapter, `app/engines/registry.py` kaydı, API/bulk
+upload bağlantısı, Health Score, Credit Score veya Recommendation Engine
+kodu YAZILMADI. Benchmark Engine tamamen saf, bağımsız bir değerlendirme
+kütüphanesi/service olarak kaldı -- `app/engines/financial_ratios/**`
+dosyalarının MEVCUT içeriğine HİÇ dokunulmadı.
+
+### Yeni dosyalar
+
+- `app/engines/common/reliability.py` (YENİ): `RELIABILITY_RANK`/
+  `worse_reliability` -- `financial_ratios/service.py`'nin yerel
+  `_RELIABILITY_RANK`/`_worse_reliability`'sinin BİREBİR aynı mantığı,
+  Benchmark Engine'in de kullanabilmesi için paylaşılan bir modüle taşındı.
+  **Bilinçli sapma:** tasarım dokümanının Bölüm 15'i "iki motor da buradan
+  import eder" diyordu; bunun yerine `financial_ratios/service.py`
+  DEĞİŞTİRİLMEDİ (kendi yerel kopyasını korudu) -- zaten test edilmiş/onaylı
+  4.3B kodunu gereksiz yere yeniden açmamak için daha katı, daha güvenli bir
+  yorum. Yalnızca Benchmark Engine bu yeni modülü kullanıyor.
+- `app/engines/common/benchmark_types.py` (YENİ): `BenchmarkIdealDirection`,
+  `BenchmarkComputationStatus`, `BenchmarkThresholds`, `BenchmarkMetadata`,
+  `BenchmarkEvaluation` dataclass/enum'ları; kapalı `"threshold_bands"`
+  stratejisi (`CALCULATION_STRATEGIES`'in benchmark karşılığı --
+  `BENCHMARK_STRATEGIES`, tek girdili); `register_benchmark`/
+  `evaluate_benchmark`; `STATUTORY_CORPORATE_TAX_RATE_TR` (=0.25) merkezi
+  sabiti + `effective_tax_rate_thresholds()` türetme fonksiyonu.
+- `app/engines/common/company_size_classifier.py` (YENİ):
+  `classify_company_size(net_sales, total_assets)` -- migration'sız mali
+  büyüklük proxy'si (`micro`/`small`/`medium`/`large`), `reliability` HİÇBİR
+  ZAMAN `"high"` değil, `employee_count_available=False` her sonuçta
+  açık, resmi KOBİ sınıflandırması olarak SUNULMUYOR (`is_official_sme_
+  classification=False`).
+- `app/engines/common/benchmark_registry.py` (YENİ): `BENCHMARK_REGISTRY`'nin
+  gerçek 48 `register_benchmark()` çağrısı (bkz. aşağıdaki kategori
+  dökümü).
+- `app/engines/benchmarks/__init__.py`, `app/engines/benchmarks/service.py`
+  (YENİ paket): `evaluate_benchmarks(ratio_result_json, *, industry_code=None,
+  company_size_bucket=None)` -- saf, bağımsız orkestrasyon fonksiyonu.
+  `EngineAdapter`/`EngineRunContext`/`AnalysisType` KULLANMAZ; hiçbir gerçek
+  akışa bağlı değildir.
+- Testler: `tests/test_benchmark_types_unit.py` (36),
+  `tests/test_company_size_classifier_unit.py` (15),
+  `tests/test_benchmark_registry_unit.py` (39),
+  `tests/test_benchmarks_service_unit.py` (12).
+
+### Kesin benchmark sayısı ve kategori dağılımı
+
+**48 benchmark girdisi** (57 kayıtlı orandan −1 `unit=currency`
+[`net_working_capital`] −8 her-zaman-`not_calculable` [`sustainable_growth_rate`,
+`fixed_charge_coverage`, `cash_flow` kategorisinin 6 oranı]):
+
+| Kategori | Benchmark sayısı |
+|---|---|
+| liquidity | 6 |
+| leverage | 9 |
+| profitability | 11 |
+| activity | 10 |
+| efficiency | 6 |
+| growth | 6 |
+| cash_flow | 0 (bilinçli olarak boş -- placeholder YOK) |
+| **Toplam** | **48** |
+
+Doğrulama: `test_total_benchmark_registry_count_is_48` (direkt
+`len(BENCHMARK_REGISTRY)` kontrolü, test-fixture'ları hariç).
+
+### Registry doğrulamaları (`register_benchmark`, kayıt anında)
+
+Yinelenen `benchmark_code`; var olmayan `ratio_code`; birim uyuşmazlığı;
+`unit="currency"` reddi; bilinmeyen `benchmark_type`; `provisional=True` +
+`reliability_ceiling="high"` reddi; `category="growth"` iken
+`inflation_adjusted=None` VEYA `reliability_ceiling != "medium_low"` reddi;
+`RANGE_IS_BETTER`'da skaler eşik / `HIGHER`,`LOWER`'da tuple eşik reddi;
+`HIGHER_IS_BETTER`/`LOWER_IS_BETTER`'da `critical=None` reddi;
+`RANGE_IS_BETTER`'da `critical` dolu olması reddi; monotonik olmayan sıra
+reddi; iç içe geçmeyen (nesting ihlali) range bantları reddi -- **13 ayrı
+doğrulama senaryosu**, hepsi `test_benchmark_types_unit.py`'de test edildi.
+
+### `RANGE_IS_BETTER` davranışları (2. tur onay karar #3)
+
+6 oranda kullanılıyor: `current_ratio`, `working_capital_ratio` (current_ratio
+ile AYNI `BenchmarkThresholds` nesnesini paylaşır -- drift riski yapısal
+olarak önlendi), `working_capital_to_total_assets`, `effective_tax_rate`
+(merkezi `STATUTORY_CORPORATE_TAX_RATE_TR`'den türetilir),
+`payables_turnover`, `days_payables_outstanding` (ikisi de aşırı hızlı VE
+aşırı yavaş ödemenin İKİSİNİN DE riskli olduğunu iki taraflı bantlarla
+modeller). Bantlar İÇ İÇE (excellent ⊆ good ⊆ average ⊆ weak) modellenir;
+weak bandının DIŞI otomatik `critical` sayılır. `quick_ratio`/
+`financial_leverage_multiplier` MEVCUT higher/lower yaklaşımında kaldı
+(DEĞİŞMEDİ). `warning_threshold` hem tek taraflı (skaler) hem iki taraflı
+(`(low, high)` tuple) şekli destekler -- `payables_turnover`/`days_
+payables_outstanding` iki taraflı, diğerleri tek taraflı.
+
+### Reliability ve provisional politika sonuçları
+
+Her 48 girdi `source="internal_heuristic"` + `provisional=True` +
+`reliability_ceiling="medium"` (büyüme kategorisinin 6 girdisi HARİÇ --
+onlar `reliability_ceiling="medium_low"` + `inflation_adjusted=False`)
+taşır. Nihai `BenchmarkEvaluation.reliability`, ratio'nun kendi
+reliability'si ile `reliability_ceiling`'in `worse_reliability()` ile
+kıyaslanmış hâlidir -- ratio "high" olsa bile benchmark ASLA "high"
+olamaz (test: `test_reliability_ceiling_caps_result`,
+`test_growth_entry_carries_inflation_adjusted_false`).
+`classify_company_size()`'ın kendi `reliability`'si de aynı ilkeyle HİÇBİR
+ZAMAN "high" değildir (test: `test_reliability_never_high`).
+
+### Computation status davranışları
+
+`RATIO_STATUS_NOT_CALCULATED` (ratio zaten `calculated` değilse -- ör.
+`NO_OBLIGATION`, `missing_input` -- benchmark DEĞERLENDİRİLMEZ, orijinal
+status şeffafça `underlying_ratio_status`'a taşınır, tier FABRİKE EDİLMEZ);
+`BENCHMARK_NOT_REGISTERED` (`net_working_capital`, `sustainable_growth_rate`,
+`fixed_charge_coverage`, `cash_flow` kategorisinin 6 oranı -- 9 ratio_code
+HER ZAMAN bu status'u alır); `EVALUATED` (tier ataması yapıldı).
+`PERCENTILE_DATA_UNAVAILABLE`/`STALE_BENCHMARK_DATA` rezerve, 4.3C'de HİÇ
+tetiklenmez (`supports_percentile=False` her yerde).
+
+### Override çözümleme sırası (2. tur onay karar #2)
+
+`industry_overrides > company_size_overrides > default_thresholds`.
+`country` bu zincire HİÇ dahil değil (karar #5 -- hiçbir alan/parametre
+eklenmedi, `test_no_country_parameter_exists_in_function_signature` bunu
+`inspect.signature` ile doğrular). 4.3C'de gerçek override verisi BOŞ
+olduğu için (48 girdinin `industry_overrides`/`company_size_overrides`
+dict'leri boş) sıra yalnızca sentetik test fixture'larıyla (`_test_higher`,
+industry+company_size override'lı) doğrulandı --
+`test_override_resolution_order_industry_beats_company_size_beats_default`.
+
+### Gerçekten çalıştırılan testler (sandbox, sqlalchemy'siz)
+
+`app.models` için stub namespace-paketi (4.3B'den kalan teknik) ile 9
+dosya, TOPLAM **246/246 test geçti**:
+
+| Dosya | Geçti | Kaldı |
+|---|---|---|
+| test_ratio_formulas_unit.py | 79 | 0 |
+| test_engine_balance_income_statement_unit.py | 31 | 0 |
+| test_engine_registry_unit.py | 22 | 0 |
+| test_canonical_facts_unit.py | 7 | 0 |
+| test_chart_of_accounts_parity.py | 5 | 0 |
+| test_benchmark_types_unit.py | 36 | 0 |
+| test_company_size_classifier_unit.py | 15 | 0 |
+| test_benchmark_registry_unit.py | 39 | 0 |
+| test_benchmarks_service_unit.py | 12 | 0 |
+| **TOPLAM** | **246** | **0** |
+
+İlk 5 dosya (4.3A/4.3B'den) DEĞİŞTİRİLMEDİ ve hiç regresyon YOK -- bu,
+Benchmark Engine'in `financial_ratios/**`'e dokunmadığının kanıtıdır.
+
+### Çalıştırılamayan testler
+
+`test_companies_api.py`/`test_periods_api.py`/`test_postgres_integration.py`
+gibi sqlalchemy/fastapi/pytest'e bağımlı testler bu milestone'da da
+DEĞİŞTİRİLMEDİ ve aynı PyPI proxy kısıtı nedeniyle bu sandbox'ta hâlâ
+çalıştırılamıyor (4.3B raporundaki durumla AYNI).
+
+### Performans ölçümü (gerçek, ölçülmüş -- tahmin DEĞİL)
+
+500 tekrar, gerçek sentetik BS+IS fixture'ları + önceki dönem verisiyle:
+- Yalnızca `evaluate_benchmarks()` (57 ratio_key, 48'i benchmarklı):
+  **~0.11 ms/çağrı**.
+- `analyze_financial_ratios()` + `evaluate_benchmarks()` birlikte:
+  **~0.41 ms/çağrı**.
+
+Tasarım dokümanı Bölüm 20'nin "<0.1ms ek yük" tahmini büyük ölçüde
+doğrulandı (gerçek ek yük ~0.11ms, aynı büyüklük mertebesinde) -- üstel
+artış YOK, benchmark değerlendirmesi O(1) saf karşılaştırma.
+
+### Git durumu
+
+Hiçbir commit/push yapılmadı (`git log` hâlâ `f26de3f` -- 4.3B'nin son
+commit'i). Yalnızca YENİ dosyalar eklendi: `app/engines/common/
+reliability.py`, `app/engines/common/benchmark_types.py`, `app/engines/
+common/company_size_classifier.py`, `app/engines/common/
+benchmark_registry.py`, `app/engines/benchmarks/__init__.py`, `app/engines/
+benchmarks/service.py`, 4 test dosyası, bu README güncellemesi, `docs/
+FINOS_MILESTONE_4_3C_BENCHMARK_ENGINE_DESIGN.md`. Doğrulandı (kaynak-metin
+taramasıyla): `app/engines/registry.py`, `app/engines/protocol.py`,
+`app/engines/financial_ratios/**`, `app/models/enums.py`, `alembic/`,
+`app/trial_balance/**`, `app/services/bulk_upload.py`, `app/api/**` --
+HİÇBİRİNE dokunulmadı. Migration YOK. `AnalysisType.BENCHMARK_COMPARISON`
+eklenmedi. `BenchmarkEngineAdapter` yazılmadı. Health Score/Credit
+Score/Recommendation Engine implementasyonu YOK.
+
 ## Bilinçli olarak yapılmayan bir şey
 
 `backend/tests/data/generic/2024_detay_mizan.xlsx` gerçek, anonimleştirilmemiş
