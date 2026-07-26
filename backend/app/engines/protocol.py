@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import date
 from typing import ClassVar, Protocol, runtime_checkable
 
 from app.models.enums import AnalysisSourceRole, AnalysisStatus, AnalysisType, SourceMode
@@ -108,6 +109,17 @@ class EngineRunContext:
     # alanlarının aynı gerekçesi).
     prior_period_balance_sheet_result: dict | None = None
     prior_period_income_statement_result: dict | None = None
+
+    # Milestone 4.3B (Core Financial Ratios) -- ADDITIVE, geriye uyumlu.
+    # `ratio_derived_facts.compute_days_in_period`'in ihtiyaç duyduğu
+    # `FinancialPeriod.start_date`/`end_date`/`months_covered` -- bu alanlar
+    # 4.3A'da hiç yoktu (o zaman hiçbir oran gün-bazlı hesaplama
+    # yapmıyordu). Şu anki hiçbir adaptör bunu KULLANMIYOR/etkilenmiyor --
+    # yalnızca FinancialRatioEngineAdapter (hâlâ HİÇBİR akışa bağlı değil)
+    # okur.
+    period_start_date: date | None = None
+    period_end_date: date | None = None
+    period_months_covered: int | None = None
 
 
 @dataclass

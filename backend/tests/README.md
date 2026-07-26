@@ -638,6 +638,184 @@ alembic upgrade head
 pytest tests/ -v
 ```
 
+## 8. Milestone 4.3B: Core Financial Ratios (Likidite/Kârlılık/Borçluluk/Faaliyet/Verimlilik/Büyüme/Nakit)
+
+Onaylanan tasarım dokümanı: `docs/FINOS_MILESTONE_4_3B_TECHNICAL_DESIGN.md`
+(2. tur onay kararlarıyla güncellendi). Bölüm 9'daki 10 adımlık plan
+AYNEN, sırayla, her adımın testleri tam yeşil olmadan bir sonrakine
+geçilmeden uygulandı.
+
+### Yeni/genişleyen dosyalar
+
+- `app/engines/common/ratio_formulas.py`: `RatioFormulaMetadata`'ya 6 yeni
+  additive alan (`depends_on_ratios`, `current_field`, `prior_field`,
+  `scale_field`, `engine_dependency`, `direct_document_only_fields`); 2 yeni
+  strateji (`growth_rate`, `scaled_division` -- `CALCULATION_STRATEGIES`
+  artık 4 kayıt); `register_ratio_formula`'ya `depends_on_ratios`
+  doğrulaması; `RATIO_REGISTRY_VERSION` `"1.0.0"` → `"1.1.0"`; 48 yeni
+  `register_ratio_formula` çağrısı (9 → 57 toplam kayıt).
+- `app/engines/common/ratio_derived_facts.py`: `compute_days_in_period`'in
+  birincil formülü `(end_date-start_date).days` → `(end_date-start_date).
+  days + 1` (KAPSAYICI) düzeltildi + geçersiz tarih sırası kontrolü eklendi;
+  9 yeni fonksiyon (`compute_average_inventory/_trade_receivables/
+  _trade_payables/_total_assets/_equity/_working_capital`,
+  `compute_quick_assets`, `compute_capital_employed`, `compute_tax_expense`,
+  `compute_invested_capital`).
+- `app/engines/protocol.py`: `EngineRunContext`'e 3 additive alan
+  (`period_start_date`, `period_end_date`, `period_months_covered`).
+- `app/engines/financial_ratios/service.py`: orkestrasyon Adım 3-9 boyunca
+  önemli ölçüde genişledi -- `_CATEGORY_RATIO_KEYS` artık 7 kategori (57
+  oran); `NOT_APPLICABLE` kısayolu (`direct_document_only_fields`);
+  `engine_dependency` kısayolu; `average_*` enjeksiyonu +
+  `calculation_basis`/`reliability` çifti; `effective_tax_rate` aralık-dışı
+  kontrolü; `sustainable_growth_rate`/`fixed_charge_coverage` için her-zaman-
+  `not_calculable` kısayolları; `prior_*` alan enjeksiyonu (büyüme oranları).
+- `app/engines/financial_ratios/adapter.py`: `context.period_start_date/
+  end_date/months_covered` ve `context.prior_period_income_statement_
+  result`'ın `analyze_financial_ratios`'a iletilmesi (adaptör HÂLÂ hiçbir
+  gerçek akışa bağlı değil).
+- `app/engines/income_statement/analyzer.py`: `compute_margins`'in KALAN 2
+  alanı (`ebit_margin_pct`/`ebitda_margin_pct`) da artık `RATIO_REGISTRY`
+  üzerinden hesaplanıyor (`ebit_margin`/`ebitda_margin` kayıtları) --
+  "registry duplication" riski kapatıldı, BS/IS'te bağımsız ikinci bir
+  aritmetik formül KALMADI. `result_json["margins"]` şekli (5 anahtar)
+  DEĞİŞMEDİ.
+- `tests/test_ratio_formulas_unit.py`: 41 → 79 test (+38 yeni).
+
+### Kesin oran sayısı
+
+`RATIO_REGISTRY` toplam **57 kayıt** (4.3A'nın 9'u + 4.3B'nin 48 yenisi):
+liquidity=7, leverage=10, profitability=11, activity=10, efficiency=6,
+growth=7, cash_flow=6. Her zaman `not_calculable` kalan 8 oran:
+`fixed_charge_coverage`, `sustainable_growth_rate`, ve Nakit Akışı
+kategorisinin 6'sı (`engine_dependency="cash_flow"` ile).
+
+### Strategy sözleşmeleri (kapalı küme, 4 kayıt)
+
+- `sum_division`: `sum(numerator_fields) / sum(denominator_fields)` (DEĞİŞMEDİ).
+- `linear_combination`: `sum(addend_fields) - sum(subtrahend_fields)` (DEĞİŞMEDİ).
+- `growth_rate` (YENİ): `(facts[current_field] - facts[prior_field]) / abs(facts[prior_field]) * 100`.
+  `prior==0` → `UNDEFINED_ZERO_DENOMINATOR` (NO_OBLIGATION DEĞİL).
+- `scaled_division` (YENİ): `(sum(numerator_fields) / sum(denominator_fields)) * facts[scale_field]`,
+  `unit="percentage"` ise quantize sonrası ×100 (sum_division ile tutarlı).
+  Eval/exec/expression parser YOK; her ikisi de aynı `try/except
+  (InvalidOperation, OverflowError, ArithmeticError)` güvenlik desenini
+  miras alır.
+
+### `depends_on_ratios` orkestrasyonu ve dependency sırası
+
+`register_ratio_formula`, `depends_on_ratios`'taki her key'in kayıt ANINDA
+RATIO_REGISTRY'de zaten var olduğunu doğrular (döngüsel bağımlılık yapısal
+olarak imkansız). Orkestrasyon (`analyze_financial_ratios`), her oran
+hesaplandığında `facts[ratio_key] = outcome.value` enjekte eder; kategori
+işleme sırası (`_CATEGORY_RATIO_KEYS` dict sırası: liquidity → leverage →
+profitability → activity → efficiency → growth → cash_flow) ve
+kategori-içi tuple sırası, gerçek bağımlılık zincirini önce hesaplayacak
+şekilde elle düzenlenmiştir:
+`net_working_capital` → `working_capital_to_total_assets`/
+`working_capital_turnover`; `inventory_turnover`/`receivables_turnover`/
+`payables_turnover` → `days_inventory_outstanding`/`days_sales_outstanding`/
+`days_payables_outstanding` → `cash_conversion_cycle`; `effective_tax_rate`
+→ `return_on_invested_capital`; `return_on_equity` → (referans olarak)
+`sustainable_growth_rate` (her zaman not_calculable kısayoluyla, gerçek
+formül hiç çağrılmıyor).
+
+### Status davranışları (yeni/değişen kararlar)
+
+- `short_term_debt_ratio`: `total_liabilities=0` → `NO_OBLIGATION`,
+  `value=None` (sahte 0/Infinity YOK).
+- `interest_coverage_ratio`/`ebitda_coverage_ratio`: `financing_expenses=0`
+  → `NO_OBLIGATION` (finansman gideri yok, olumlu durum).
+- `quick_ratio`/`cash_ratio`/`defensive_interval_ratio`/
+  `inventory_turnover`/`receivables_turnover`/`payables_turnover`: BS
+  `source_mode != "direct_document"` iken `NOT_APPLICABLE`
+  (`compute_registered_ratio` hiç çağrılmadan, `direct_document_only_
+  fields` kontrolüyle) -- `MISSING_INPUT` ile karıştırılmaz.
+- Nakit Akışı kategorisinin 6 oranı: HER ZAMAN `NOT_CALCULABLE`
+  (`engine_dependency="cash_flow"`, Cash Flow Engine Milestone 4.4'ü
+  bekliyor) -- `MISSING_INPUT` DEĞİL.
+- `sustainable_growth_rate`/`fixed_charge_coverage`: HER ZAMAN
+  `NOT_CALCULABLE` (kâr dağıtım verisi / kiralama gideri hiçbir motorda
+  yok, kanuni/varsayılan değer FABRİKE EDİLMEDİ).
+- `effective_tax_rate`: `[0,1]` aralığı dışında bir değer üretirse
+  GİZLENMEZ, `EFFECTIVE_TAX_RATE_OUT_OF_EXPECTED_RANGE` warning'i +
+  `reliability="low"` eklenir.
+- `growth_rate` ailesi (`sales_growth` vb.): `prior==0` →
+  `UNDEFINED_ZERO_DENOMINATOR`.
+
+### Average fallback politikası
+
+`average_inventory`/`average_trade_receivables`/`average_trade_payables`/
+`average_total_assets`/`average_equity`/`average_working_capital`: ikisi de
+doluysa `(current+prior)/2`, `reliability="high"`,
+`calculation_basis="two_period_average"`; yalnızca cari doluysa
+`current`'a düşülür, `reliability="medium"`,
+`calculation_basis="ending_balance_fallback"` -- **WARNING ÜRETİLMEZ**
+(önceki dönemin bulunmaması normal bir iş durumudur, `days_in_period`'in
+`months_covered*30` fallback'inden BİLİNÇLİ OLARAK farklı bir politika).
+`average_total_assets`, `return_on_assets` VE `asset_turnover` tarafından
+AYNI enjekte edilmiş değerden okunur (test edildi, Bölüm 8 riski kapatıldı).
+
+### `days_in_period` düzeltmesi
+
+Birincil formül `(end_date - start_date).days + 1` (KAPSAYICI) -- eski
+(`+1`siz) formül 2024 (artık yıl) için 365 üretiyordu, DOĞRUSU 366'dır.
+Zorunlu testler (hepsi geçti): 2025 (normal yıl) → 365; 2024 (artık yıl) →
+366; tarihler yok + `months_covered=12` → 360 (`reliability="low"`,
+warning VAR); `end_date < start_date` → kontrollü `not_calculable` +
+`DAYS_IN_PERIOD_INVALID_DATE_ORDER` warning (ham exception YOK); `date.min`/
+`date.max` gibi uç tarihlerde bile exception sızmıyor.
+
+### Gerçekten çalıştırılan testler ve regresyon sonucu
+
+Sandbox-only `importlib` stub tekniğiyle GERÇEKTEN çalıştırıldı:
+
+```
+tests/test_ratio_formulas_unit.py            (genişledi, 79 test -- +38 yeni)
+tests/test_engine_balance_income_statement_unit.py  (DEĞİŞMEDİ, 31 test)
+tests/test_engine_registry_unit.py           (DEĞİŞMEDİ, 22 test)
+tests/test_canonical_facts_unit.py           (DEĞİŞMEDİ, 7 test)
+tests/test_chart_of_accounts_parity.py       (DEĞİŞMEDİ, 5 test)
+```
+
+**TOPLAM: 144 test, 144 passed, 0 failed, 0 skipped.** Milestone 4.3A'nın
+106 testlik temel çizgisine göre net +38 test -- ve o 106 testin TAMAMI
+hiçbir değişiklik olmadan (veya yalnızca genişletilerek) yeşil kalmaya
+devam ediyor; hiçbir mevcut test "gerekçesiz" değiştirilmedi (BS/IS
+`result_json` şekli/sayısal değerleri Milestone 4.2 ile bit-bir aynı
+kaldı -- `test_analyze_income_statement_provenance_contract` ve
+`test_provenance_to_dict_unchanged_5_keys` benzeri regresyon testleri
+DEĞİŞMEDEN geçiyor).
+
+`app/services/bulk_upload.py`/`app/trial_balance/**`/sqlalchemy-bağımlı
+diğer testler bu milestone'da HİÇ DEĞİŞTİRİLMEDİ ve zaten bu sandbox'ta
+çalıştırılamıyor (aynı `sqlalchemy`/`fastapi`/`pydantic` PyPI proxy kısıtı)
+-- kaynak-metin taramasıyla (`git status`/`grep`) bu dosyalara HİÇBİR
+dokunuş olmadığı doğrulandı.
+
+### Performans ölçümü
+
+57 kayıtlı oranın TAMAMI için tek bir `analyze_financial_ratios()` çağrısı
+(gerçek sentetik BS+IS fixture'larıyla, 500 tekrar ortalaması):
+**~0.22 ms/çağrı** -- 4.3A'nın 9-oranlı sürümüne göre oran sayısı ~6x
+arttı ama süre ihmal edilebilir düzeyde kaldı (üstel artış YOK,
+`depends_on_ratios` zincirlerinin en derini 3 seviye -- `cash_conversion_
+cycle` → `days_*` → `*_turnover` -- ve her seviye yalnızca bir sözlük
+okuması).
+
+### Git durumu
+
+Hiçbir commit/push yapılmadı (`git log` hâlâ `b278a1d` -- 4.3A'nın son
+commit'i). Değişen dosyalar: 6 mevcut motor dosyası (`ratio_formulas.py`,
+`ratio_derived_facts.py`, `protocol.py`, `financial_ratios/service.py`,
+`financial_ratios/adapter.py`, `income_statement/analyzer.py`) + 1 test
+dosyası (`test_ratio_formulas_unit.py`) + bu README. Yeni dosya: `docs/
+FINOS_MILESTONE_4_3B_TECHNICAL_DESIGN.md`. `app/trial_balance/**`,
+`app/services/bulk_upload.py`, `alembic/`, `app/api/**`'e HİÇBİR dokunuş
+YOK (kaynak-metin taramasıyla doğrulandı). Migration YOK. `ratio_
+recompute.py` YOK. Benchmark/Health Score/Credit Score/Recommendation
+Engine implementasyonu YOK.
+
 ## Bilinçli olarak yapılmayan bir şey
 
 `backend/tests/data/generic/2024_detay_mizan.xlsx` gerçek, anonimleştirilmemiş

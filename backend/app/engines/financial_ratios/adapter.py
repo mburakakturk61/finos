@@ -47,6 +47,11 @@ class FinancialRatioEngineAdapter:
         result_json = analyze_financial_ratios(
             balance_sheet_result=context.balance_sheet_result,
             income_statement_result=context.income_statement_result,
+            prior_period_balance_sheet_result=context.prior_period_balance_sheet_result,
+            prior_period_income_statement_result=context.prior_period_income_statement_result,
+            period_start_date=context.period_start_date,
+            period_end_date=context.period_end_date,
+            period_months_covered=context.period_months_covered,
         )
 
         return EngineRunResult(

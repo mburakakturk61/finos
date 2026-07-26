@@ -198,12 +198,50 @@ class RatioFormulaMetadata:
     zero_denominator_status: ComputationStatus = ComputationStatus.UNDEFINED_ZERO_DENOMINATOR
     quantize_exp: str = "0.0001"
 
+    # --- Milestone 4.3B: additive, geriye uyumlu (varsayılan değerli) ----
+    # alanlar (onaylanan 4.3B tasarım dokümanı, Bölüm 5, 2. tur onay).
+    #
+    # `depends_on_ratios`: yalnızca `"sum_division"`/`"linear_combination"`
+    # tarafından, SIRADAN bir facts-alanı gibi okunur -- bu oranın hangi
+    # BAŞKA RATIO_REGISTRY anahtarlarının ZATEN HESAPLANMIŞ değerine
+    # ihtiyaç duyduğunu belirtir (ör. days_inventory_outstanding ->
+    # inventory_turnover). Orkestrasyon (financial_ratios/service.py),
+    # bağımlı oranı hesaplamadan ÖNCE bağımlılığın değerini facts dict'e
+    # KENDİ key'iyle enjekte eder (Bölüm 3.2). `register_ratio_formula`,
+    # buradaki her key'in kayıt ANINDA RATIO_REGISTRY'de zaten var
+    # olduğunu doğrular -- döngüsel bağımlılık yapısal olarak imkansızdır.
+    depends_on_ratios: tuple[str, ...] = ()
+
+    # `current_field`/`prior_field`: yalnızca `"growth_rate"` stratejisi
+    # tarafından okunur (Bölüm 3.3).
+    current_field: str | None = None
+    prior_field: str | None = None
+
+    # `scale_field`: yalnızca `"scaled_division"` stratejisi tarafından
+    # okunur (Bölüm 3.4, 2. tur onay karar #1).
+    scale_field: str | None = None
+
+    # `engine_dependency`: bu oranın ihtiyaç duyduğu bir motorun adı (ör.
+    # "cash_flow") -- `EngineRunContext`'te bu motorun sonucu YOKSA,
+    # orkestrasyon `compute_registered_ratio`'yu HİÇ ÇAĞIRMADAN doğrudan
+    # NOT_CALCULABLE üretir (2. tur onay karar #3, Bölüm 5.5). `None` ise
+    # bu kontrol hiç uygulanmaz (4.3A'nın 9 oranı gibi).
+    engine_dependency: str | None = None
+
+    # `direct_document_only_fields`: bu formülün kullandığı, yalnızca
+    # `source_mode="direct_document"` iken GERÇEKTEN dolu olabilen alanlar
+    # (ör. quick_ratio -> ("inventory",)). Orkestrasyon, ilgili BS/IS
+    # sonucunun `source_mode`'u farklıysa `compute_registered_ratio`'yu HİÇ
+    # ÇAĞIRMADAN doğrudan NOT_APPLICABLE üretir (Bölüm 6).
+    direct_document_only_fields: tuple[str, ...] = ()
+
 
 RATIO_REGISTRY: dict[str, RatioFormulaMetadata] = {}
-RATIO_REGISTRY_VERSION = "1.0.0"
-# Milestone 4.3A: J.2'deki cache-anahtarı tasarımının bir parçası (henüz
-# hiçbir cache implementasyonu YOK -- yalnızca sürüm sabiti burada, formül
-# değiştiğinde (implementasyon sonrası bir düzeltme) yükseltilecek).
+RATIO_REGISTRY_VERSION = "1.1.0"
+# Milestone 4.3B: RatioFormulaMetadata'nın şekli değişti (yukarıdaki 6 yeni
+# additive alan + growth_rate/scaled_division stratejileri) -- J.2'deki
+# cache-anahtarı tasarımının gerektirdiği disiplinle "1.0.0" -> "1.1.0"
+# yükseltildi.
 
 
 def _resolve_fields(
@@ -343,15 +381,176 @@ def compute_linear_combination(
         )
 
 
+def compute_growth_rate(
+    metadata: RatioFormulaMetadata, facts: dict[str, Decimal | None]
+) -> ComputationOutcome:
+    """
+    `"growth_rate"` stratejisi (Milestone 4.3B, onaylanan tasarım Bölüm 3.3):
+    `value = (current - prior) / abs(prior) * 100`. Yalnızca
+    `current_field`/`prior_field` okunur -- `numerator_fields`/
+    `denominator_fields` bu strateji için hiç kullanılmaz.
+
+    `prior == 0` -> `UNDEFINED_ZERO_DENOMINATOR` (NO_OBLIGATION DEĞİL --
+    "büyüme yok" ile "geçen dönem sıfırdı" karıştırılmaz, onaylanan
+    tasarım kararı). Hiçbir ham Decimal exception dışarı sızmaz.
+    """
+
+    try:
+        if metadata.current_field is None or metadata.prior_field is None:
+            return ComputationOutcome(
+                status=ComputationStatus.NOT_CALCULABLE,
+                value=None,
+                warnings=(
+                    {
+                        "code": "GROWTH_RATE_FIELD_CONFIG_MISSING",
+                        "severity": "high",
+                        "message": (
+                            f"'{metadata.key}' için current_field/prior_field "
+                            "tanımlı değil (metadata hatası)."
+                        ),
+                    },
+                ),
+            )
+
+        current = facts.get(metadata.current_field)
+        prior = facts.get(metadata.prior_field)
+
+        missing: list[str] = []
+        if current is None:
+            missing.append(metadata.current_field)
+        if prior is None:
+            missing.append(metadata.prior_field)
+        if missing:
+            return ComputationOutcome(
+                status=ComputationStatus.MISSING_INPUT,
+                value=None,
+                missing_inputs=tuple(missing),
+            )
+
+        if prior == 0:
+            return ComputationOutcome(
+                status=ComputationStatus.UNDEFINED_ZERO_DENOMINATOR,
+                value=None,
+                warnings=(
+                    {
+                        "code": "UNDEFINED_ZERO_DENOMINATOR",
+                        "severity": "high",
+                        "message": (
+                            f"'{metadata.key}' için önceki dönem değeri "
+                            "gerçekten sıfır; büyüme oranı sıfırdan "
+                            "tanımsızdır (eksik veri değildir)."
+                        ),
+                    },
+                ),
+            )
+
+        quantized = ((current - prior) / abs(prior)).quantize(
+            Decimal(metadata.quantize_exp), rounding=ROUND_HALF_UP
+        )
+        value = quantized * Decimal("100")
+        return ComputationOutcome(status=ComputationStatus.CALCULATED, value=value)
+    except (InvalidOperation, OverflowError, ArithmeticError) as error:
+        return ComputationOutcome(
+            status=ComputationStatus.NOT_CALCULABLE,
+            value=None,
+            warnings=(
+                {
+                    "code": "CALCULATION_STRATEGY_INTERNAL_ERROR",
+                    "severity": "high",
+                    "message": (
+                        f"'{metadata.key}' hesaplanırken beklenmeyen bir "
+                        f"sayısal hata oluştu: {error}"
+                    ),
+                },
+            ),
+        )
+
+
+def compute_scaled_division(
+    metadata: RatioFormulaMetadata, facts: dict[str, Decimal | None]
+) -> ComputationOutcome:
+    """
+    `"scaled_division"` stratejisi (Milestone 4.3B, 2. tur onay karar #1):
+    `value = (sum(numerator_fields) / sum(denominator_fields)) *
+    scale_field`. `defensive_interval_ratio` gibi "oran x gün/katsayı"
+    formülleri için -- eval/exec/expression parser YOK, yalnızca açıkça
+    kayıtlı metadata alanlarını okuyan saf bir fonksiyon.
+    """
+
+    try:
+        numerator, num_missing = _resolve_fields(metadata.numerator_fields, facts)
+        denominator, den_missing = _resolve_fields(metadata.denominator_fields, facts)
+        missing = list(num_missing) + list(den_missing)
+
+        scale_value: Decimal | None = None
+        if metadata.scale_field is None:
+            return ComputationOutcome(
+                status=ComputationStatus.NOT_CALCULABLE,
+                value=None,
+                warnings=(
+                    {
+                        "code": "SCALED_DIVISION_FIELD_CONFIG_MISSING",
+                        "severity": "high",
+                        "message": (
+                            f"'{metadata.key}' için scale_field tanımlı "
+                            "değil (metadata hatası)."
+                        ),
+                    },
+                ),
+            )
+        scale_value = facts.get(metadata.scale_field)
+        if scale_value is None:
+            missing.append(metadata.scale_field)
+
+        if missing:
+            return ComputationOutcome(
+                status=ComputationStatus.MISSING_INPUT,
+                value=None,
+                missing_inputs=tuple(missing),
+            )
+
+        if denominator == 0:
+            return ComputationOutcome(
+                status=metadata.zero_denominator_status,
+                value=None,
+                warnings=_zero_denominator_warning(metadata),
+            )
+
+        raw = (numerator / denominator) * scale_value
+        quantized = raw.quantize(Decimal(metadata.quantize_exp), rounding=ROUND_HALF_UP)
+        # sum_division ile TUTARLI davranış: unit="percentage" ise quantize
+        # SONRASI 100 ile çarpılır (ör. return_on_invested_capital).
+        value = quantized * Decimal("100") if metadata.unit == "percentage" else quantized
+        return ComputationOutcome(status=ComputationStatus.CALCULATED, value=value)
+    except (InvalidOperation, OverflowError, ArithmeticError) as error:
+        return ComputationOutcome(
+            status=ComputationStatus.NOT_CALCULABLE,
+            value=None,
+            warnings=(
+                {
+                    "code": "CALCULATION_STRATEGY_INTERNAL_ERROR",
+                    "severity": "high",
+                    "message": (
+                        f"'{metadata.key}' hesaplanırken beklenmeyen bir "
+                        f"sayısal hata oluştu: {error}"
+                    ),
+                },
+            ),
+        )
+
+
 # Milestone 4.3A: KAPALI strateji kümesi -- eval/exec/dinamik expression
-# YOK. Gelecekteki stratejiler (average_balance_division/days_conversion/
-# ratio_of_ratio/boolean_threshold -- Milestone 4.3B+) yalnızca mimari
-# dokümanda İSİM olarak kayıtlıdır, burada YOKTUR.
+# YOK. Milestone 4.3B (onaylanan tasarım Bölüm 3): `average_balance_
+# division`/`ratio_of_ratio`/`boolean_threshold` GEREKSİZ bulundu (mevcut
+# stratejiler + `depends_on_ratios` orkestrasyonu yeterli) -- yalnızca
+# `growth_rate` ve `scaled_division` GERÇEKTEN gerekli bulunup eklendi.
 CALCULATION_STRATEGIES: dict[
     str, Callable[[RatioFormulaMetadata, dict[str, Decimal | None]], ComputationOutcome]
 ] = {
     "sum_division": compute_sum_division,
     "linear_combination": compute_linear_combination,
+    "growth_rate": compute_growth_rate,
+    "scaled_division": compute_scaled_division,
 }
 
 
@@ -373,6 +572,18 @@ def register_ratio_formula(metadata: RatioFormulaMetadata) -> None:
             f"Bilinmeyen calculation_strategy: {metadata.calculation_strategy!r} "
             f"(oran: {metadata.key!r}). CALCULATION_STRATEGIES'de kayıtlı olmalı."
         )
+    # Milestone 4.3B (onaylanan tasarım Bölüm 5.1): `depends_on_ratios`'taki
+    # her key, kayıt ANINDA RATIO_REGISTRY'de ZATEN var olmalı --
+    # bağımlılıklar kendilerinden SONRA tanımlanan bir orana işaret edemez.
+    # Bu, modül-seviyesi kayıt sırasını bir topolojik sıralamaya zorlar;
+    # döngüsel bağımlılık yapısal olarak İMKANSIZDIR.
+    for dependency_key in metadata.depends_on_ratios:
+        if dependency_key not in RATIO_REGISTRY:
+            raise ValueError(
+                f"'{metadata.key}' oranı, henüz kayıtlı olmayan "
+                f"'{dependency_key}' oranına bağımlı (depends_on_ratios). "
+                "Bağımlılıklar KENDİLERİNDEN ÖNCE kayıtlı olmalı."
+            )
     RATIO_REGISTRY[metadata.key] = metadata
 
 
@@ -407,6 +618,16 @@ def _build_derivation_rule(metadata: RatioFormulaMetadata) -> str:
         for field_name in metadata.subtrahend_fields:
             parts.append(f"- {field_name}")
         return " ".join(parts) if parts else "(tanımsız)"
+    if metadata.calculation_strategy == "growth_rate":
+        return (
+            f"({metadata.current_field} - {metadata.prior_field}) / "
+            f"abs({metadata.prior_field}) * 100"
+        )
+    if metadata.calculation_strategy == "scaled_division":
+        return (
+            f"{_join_terms(metadata.numerator_fields)} / "
+            f"{_join_terms(metadata.denominator_fields)} * {metadata.scale_field}"
+        )
     return f"(bilinmeyen strateji: {metadata.calculation_strategy})"
 
 
@@ -481,15 +702,30 @@ def compute_registered_ratio(
         reliability if outcome.status == ComputationStatus.CALCULATED else "not_calculable"
     )
 
+    extra_fields: tuple[str, ...] = ()
+    if metadata.current_field:
+        extra_fields += (metadata.current_field,)
+    if metadata.prior_field:
+        extra_fields += (metadata.prior_field,)
+    if metadata.scale_field:
+        extra_fields += (metadata.scale_field,)
+    # Milestone 4.3B: `depends_on_ratios`'taki key'ler de provenance'ın
+    # `input_fields`'ına eklenir -- bağımlı bir oranın ZİNCİRİNİ takip
+    # etmek isteyen bir kullanıcı en azından ADI görebilir (Bölüm 8
+    # "provenance bozulması" riskinin kısmi azaltımı).
+    extra_fields += metadata.depends_on_ratios
+
     all_input_fields = (
         metadata.numerator_fields
         + metadata.denominator_fields
         + metadata.addend_fields
         + metadata.subtrahend_fields
+        + extra_fields
     )
     rounding_applied = (
         f"quantize({metadata.quantize_exp}, ROUND_HALF_UP)"
-        if metadata.calculation_strategy == "sum_division"
+        if metadata.calculation_strategy
+        in ("sum_division", "growth_rate", "scaled_division")
         else "yuvarlama yok (linear_combination)"
     )
 
@@ -616,5 +852,641 @@ register_ratio_formula(
         calculation_strategy="sum_division",
         numerator_fields=("net_profit",),
         denominator_fields=("net_sales",),
+    )
+)
+
+# --- Milestone 4.3B / Step 3: Likidite + Borçluluk'un kalan oranları -------
+# (onaylanan 4.3B tasarım dokümanı Bölüm 2.1/2.3/3.4, 2. tur onay kararları
+# #1/#2). Bağımlılığı OLMAYAN 9 oran -- average_*/depends_on_ratios
+# gerektirmiyor.
+
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="quick_ratio",
+        category="liquidity",
+        display_name_tr="Asit-Test Oranı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("quick_assets",),
+        denominator_fields=("short_term_liabilities",),
+        zero_denominator_status=ComputationStatus.NO_OBLIGATION,
+        direct_document_only_fields=("inventory",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="cash_ratio",
+        category="liquidity",
+        display_name_tr="Nakit Oranı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("cash_and_equivalents",),
+        denominator_fields=("short_term_liabilities",),
+        zero_denominator_status=ComputationStatus.NO_OBLIGATION,
+        direct_document_only_fields=("cash_and_equivalents",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="defensive_interval_ratio",
+        category="liquidity",
+        display_name_tr="Savunma Aralığı Oranı",
+        unit="days",
+        calculation_strategy="scaled_division",
+        numerator_fields=("cash_and_equivalents", "trade_receivables"),
+        denominator_fields=("operating_expenses", "cost_of_sales"),
+        scale_field="days_in_period",
+        direct_document_only_fields=("cash_and_equivalents", "trade_receivables"),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="long_term_debt_to_equity",
+        category="leverage",
+        display_name_tr="Uzun Vadeli Borç/Özkaynak",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("long_term_liabilities",),
+        denominator_fields=("equity",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="short_term_debt_ratio",
+        category="leverage",
+        display_name_tr="Kısa Vadeli Borç Oranı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("short_term_liabilities",),
+        denominator_fields=("total_liabilities",),
+        # 2. tur onay karar #2: total_liabilities=0 -> NO_OBLIGATION,
+        # value=None (sahte 0/Infinity ASLA üretilmez).
+        zero_denominator_status=ComputationStatus.NO_OBLIGATION,
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="financial_leverage_multiplier",
+        category="leverage",
+        display_name_tr="Finansal Kaldıraç Çarpanı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("total_assets",),
+        denominator_fields=("equity",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="interest_coverage_ratio",
+        category="leverage",
+        display_name_tr="Faiz Karşılama Oranı (EBIT)",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("ebit",),
+        denominator_fields=("financing_expenses",),
+        # finansman gideri=0 -> "karşılanacak bir şey yok" (olumlu iş
+        # anlamı) -- NO_OBLIGATION, current_ratio'daki mantığın borç
+        # servisi bağlamına genellenmiş hâli.
+        zero_denominator_status=ComputationStatus.NO_OBLIGATION,
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="ebitda_coverage_ratio",
+        category="leverage",
+        display_name_tr="EBITDA ile Faiz Karşılama",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("ebitda",),
+        denominator_fields=("financing_expenses",),
+        zero_denominator_status=ComputationStatus.NO_OBLIGATION,
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="debt_to_ebitda",
+        category="leverage",
+        display_name_tr="Borç/EBITDA",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("total_liabilities",),
+        denominator_fields=("ebitda",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="fixed_charge_coverage",
+        category="leverage",
+        display_name_tr="Sabit Ödeme Karşılama Oranı",
+        unit="ratio",
+        # Katalog/dokümantasyon amaçlı formül -- kiralama gideri
+        # (lease_payments) ayrıştırması HİÇBİR motorda/canonical_facts'te
+        # yok. Orkestrasyon (financial_ratios/service.py) bu oranı HER
+        # ZAMAN, bu strateji hiç çağrılmadan, NOT_CALCULABLE olarak kısa
+        # devre yaptırır (sustainable_growth_rate ile AYNI desen, bkz.
+        # service.py::_fixed_charge_coverage_not_calculable_outcome).
+        calculation_strategy="sum_division",
+        numerator_fields=("ebit", "lease_payments"),
+        denominator_fields=("financing_expenses", "lease_payments"),
+    )
+)
+
+# --- Milestone 4.3B / Step 4: Kârlılık'ın kalan oranları + effective_tax_
+# rate / ROIC düzeltmesi (onaylanan tasarım Bölüm 2.2/3.5, 2. tur onay
+# karar #7). `effective_tax_rate` KENDİSİ kullanıcıya anlamlı, bağımsız bir
+# metriktir (Bölüm 5.3 kuralı gereği RATIO_REGISTRY'de) -- kanuni vergi
+# oranı ASLA varsayılmaz, yalnızca gerçek IS verisinden (profit_before_tax/
+# net_profit) türetilir. `return_on_invested_capital`, `effective_tax_rate`e
+# `depends_on_ratios` ile bağlanır; scaled_division stratejisi
+# `(ebit/invested_capital) * (1-effective_tax_rate)` şeklinde matematiksel
+# olarak eşdeğer bir hesaplama yapar (bkz. tasarım Bölüm 3.5) -- YENİ bir
+# strateji GEREKTİRMEZ. `unit="ratio"` (percentage DEĞİL) BİLİNÇLİ bir
+# seçimdir -- ROIC formülündeki "(1 - effective_tax_rate)" çarpanının
+# 0-1 ölçeğinde anlamlı olması için (percentage/100 ölçeğinde olsaydı bu
+# çarpan yanlış olurdu).
+
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="ebit_margin",
+        category="profitability",
+        display_name_tr="EBIT Marjı",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("ebit",),
+        denominator_fields=("net_sales",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="ebitda_margin",
+        category="profitability",
+        display_name_tr="EBITDA Marjı",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("ebitda",),
+        denominator_fields=("net_sales",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="pretax_profit_margin",
+        category="profitability",
+        display_name_tr="Vergi Öncesi Kâr Marjı",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("profit_before_tax",),
+        denominator_fields=("net_sales",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="return_on_capital_employed",
+        category="profitability",
+        display_name_tr="Kullanılan Sermaye Getirisi (ROCE)",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("ebit",),
+        denominator_fields=("capital_employed",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="effective_tax_rate",
+        category="profitability",
+        display_name_tr="Efektif Vergi Oranı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("tax_expense",),
+        denominator_fields=("profit_before_tax",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="return_on_invested_capital",
+        category="profitability",
+        display_name_tr="Yatırılan Sermaye Getirisi (ROIC)",
+        unit="percentage",
+        calculation_strategy="scaled_division",
+        numerator_fields=("ebit",),
+        denominator_fields=("invested_capital",),
+        scale_field="one_minus_effective_tax_rate",
+        depends_on_ratios=("effective_tax_rate",),
+    )
+)
+
+# --- Milestone 4.3B / Step 5: ortalama-bakiye bağımlı oranlar (onaylanan
+# tasarım Bölüm 2.2/2.4, Bölüm 4). `average_total_assets`/`average_equity`/
+# `average_inventory`/`average_trade_receivables`/`average_trade_payables`
+# facts dict'e orkestrasyon (financial_ratios/service.py) tarafından TEK
+# noktadan enjekte edilir -- Bölüm 8 "average hesaplarının tutarsızlığı"
+# riskinin giderilmesi (return_on_assets/asset_turnover AYNI
+# `average_total_assets` anahtarını okur).
+
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="return_on_assets",
+        category="profitability",
+        display_name_tr="Aktif Kârlılığı (ROA)",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("net_profit",),
+        denominator_fields=("average_total_assets",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="return_on_equity",
+        category="profitability",
+        display_name_tr="Özkaynak Kârlılığı (ROE)",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("net_profit",),
+        denominator_fields=("average_equity",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="asset_turnover",
+        category="activity",
+        display_name_tr="Aktif Devir Hızı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("net_sales",),
+        denominator_fields=("average_total_assets",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="inventory_turnover",
+        category="activity",
+        display_name_tr="Stok Devir Hızı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("cost_of_sales",),
+        denominator_fields=("average_inventory",),
+        direct_document_only_fields=("inventory",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="receivables_turnover",
+        category="activity",
+        display_name_tr="Alacak Devir Hızı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("net_sales",),
+        denominator_fields=("average_trade_receivables",),
+        direct_document_only_fields=("trade_receivables",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="payables_turnover",
+        category="activity",
+        display_name_tr="Borç Devir Hızı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("cost_of_sales",),
+        denominator_fields=("average_trade_payables",),
+        direct_document_only_fields=("trade_payables",),
+    )
+)
+
+# --- Milestone 4.3B / Step 6: depends_on_ratios orkestrasyonu + Faaliyet
+# kategorisinin kalan 6 oranı + working_capital_to_total_assets (onaylanan
+# tasarım Bölüm 2.1/2.4, Bölüm 3.2). `depends_on_ratios`'taki her key,
+# `register_ratio_formula` tarafından kayıt ANINDA RATIO_REGISTRY'de zaten
+# var olduğu doğrulanır -- bu yüzden bağımlılık sırası KAYIT SIRASIYLA
+# (aşağıdaki register_ratio_formula çağrılarının sırasıyla) UYUMLU olmalı.
+# Orkestrasyon (financial_ratios/service.py) ayrıca kategori-tuple sırasının
+# bağımlılıkları GERÇEKTEN önce hesapladığından emin olmalıdır (bkz. Step 6
+# service.py değişikliği).
+
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="fixed_asset_turnover",
+        category="activity",
+        display_name_tr="Duran Varlık Devir Hızı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("net_sales",),
+        denominator_fields=("non_current_assets",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="working_capital_to_total_assets",
+        category="liquidity",
+        display_name_tr="İşletme Sermayesi / Toplam Aktif",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("net_working_capital",),
+        denominator_fields=("total_assets",),
+        depends_on_ratios=("net_working_capital",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="working_capital_turnover",
+        category="activity",
+        display_name_tr="İşletme Sermayesi Devir Hızı",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("net_sales",),
+        denominator_fields=("net_working_capital",),
+        depends_on_ratios=("net_working_capital",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="days_inventory_outstanding",
+        category="activity",
+        display_name_tr="Stokta Kalma Süresi",
+        unit="days",
+        calculation_strategy="sum_division",
+        numerator_fields=("days_in_period",),
+        denominator_fields=("inventory_turnover",),
+        depends_on_ratios=("inventory_turnover",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="days_sales_outstanding",
+        category="activity",
+        display_name_tr="Alacak Tahsil Süresi",
+        unit="days",
+        calculation_strategy="sum_division",
+        numerator_fields=("days_in_period",),
+        denominator_fields=("receivables_turnover",),
+        depends_on_ratios=("receivables_turnover",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="days_payables_outstanding",
+        category="activity",
+        display_name_tr="Borç Ödeme Süresi",
+        unit="days",
+        calculation_strategy="sum_division",
+        numerator_fields=("days_in_period",),
+        denominator_fields=("payables_turnover",),
+        depends_on_ratios=("payables_turnover",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="cash_conversion_cycle",
+        category="activity",
+        display_name_tr="Nakit Dönüşüm Süresi",
+        unit="days",
+        calculation_strategy="linear_combination",
+        addend_fields=("days_inventory_outstanding", "days_sales_outstanding"),
+        subtrahend_fields=("days_payables_outstanding",),
+        depends_on_ratios=(
+            "days_inventory_outstanding",
+            "days_sales_outstanding",
+            "days_payables_outstanding",
+        ),
+    )
+)
+
+# --- Milestone 4.3B / Step 7: Verimlilik kategorisi (6 oran, bağımlılık
+# YOK -- onaylanan tasarım Bölüm 2.5). Tümü sum_division, hiçbiri
+# average_*/depends_on_ratios/scaled_division gerektirmiyor.
+
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="operating_expense_ratio",
+        category="efficiency",
+        display_name_tr="Faaliyet Gideri Oranı",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("operating_expenses",),
+        denominator_fields=("net_sales",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="cost_of_sales_ratio",
+        category="efficiency",
+        display_name_tr="Satışların Maliyeti Oranı",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("cost_of_sales",),
+        denominator_fields=("net_sales",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="overhead_ratio",
+        category="efficiency",
+        display_name_tr="Genel Gider Oranı",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("operating_expenses", "other_operating_expenses"),
+        denominator_fields=("net_sales",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="ebit_to_opex",
+        category="efficiency",
+        display_name_tr="EBIT / Faaliyet Gideri",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("ebit",),
+        denominator_fields=("operating_expenses",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="non_operating_income_dependency",
+        category="efficiency",
+        display_name_tr="Faaliyet Dışı Gelir Bağımlılığı",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("other_operating_income",),
+        denominator_fields=("operating_profit",),
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="financing_expense_to_sales",
+        category="efficiency",
+        display_name_tr="Finansman Gideri / Satış",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("financing_expenses",),
+        denominator_fields=("net_sales",),
+    )
+)
+
+# --- Milestone 4.3B / Step 8: Büyüme kategorisi -- `growth_rate` stratejisi
+# (Bölüm 3.3) ilk kez GERÇEK verilerle kullanılıyor (onaylanan tasarım
+# Bölüm 2.6). `prior_*` alanları orkestrasyon (financial_ratios/service.py)
+# tarafından `prior_period_balance_sheet_result`/`prior_period_income_
+# statement_result`'tan enjekte edilir.
+
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="sales_growth",
+        category="growth",
+        display_name_tr="Satış Büyümesi",
+        unit="percentage",
+        calculation_strategy="growth_rate",
+        current_field="net_sales",
+        prior_field="prior_net_sales",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="gross_profit_growth",
+        category="growth",
+        display_name_tr="Brüt Kâr Büyümesi",
+        unit="percentage",
+        calculation_strategy="growth_rate",
+        current_field="gross_profit",
+        prior_field="prior_gross_profit",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="ebitda_growth",
+        category="growth",
+        display_name_tr="EBITDA Büyümesi",
+        unit="percentage",
+        calculation_strategy="growth_rate",
+        current_field="ebitda",
+        prior_field="prior_ebitda",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="net_profit_growth",
+        category="growth",
+        display_name_tr="Net Kâr Büyümesi",
+        unit="percentage",
+        calculation_strategy="growth_rate",
+        current_field="net_profit",
+        prior_field="prior_net_profit",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="total_assets_growth",
+        category="growth",
+        display_name_tr="Toplam Aktif Büyümesi",
+        unit="percentage",
+        calculation_strategy="growth_rate",
+        current_field="total_assets",
+        prior_field="prior_total_assets",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="equity_growth",
+        category="growth",
+        display_name_tr="Özkaynak Büyümesi",
+        unit="percentage",
+        calculation_strategy="growth_rate",
+        current_field="equity",
+        prior_field="prior_equity",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="operating_cash_flow_margin",
+        category="cash_flow",
+        display_name_tr="Faaliyet Nakit Akışı Marjı",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("operating_cash_flow",),
+        denominator_fields=("net_sales",),
+        # Milestone 4.3B / Step 9 (2. tur onay karar #3): Cash Flow Engine
+        # (Milestone 4.4) henüz YOK -- bu 6 oran HER ZAMAN, compute_
+        # registered_ratio HİÇ ÇAĞRILMADAN, NOT_CALCULABLE döner (bkz.
+        # service.py::_engine_dependency_not_calculable_outcome).
+        # MISSING_INPUT yalnızca Cash Flow Engine GERÇEKTEN mevcutken (4.4)
+        # kullanılacaktır.
+        engine_dependency="cash_flow",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="free_cash_flow_margin",
+        category="cash_flow",
+        display_name_tr="Serbest Nakit Akışı Marjı",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("free_cash_flow",),
+        denominator_fields=("net_sales",),
+        engine_dependency="cash_flow",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="cash_flow_to_debt",
+        category="cash_flow",
+        display_name_tr="Nakit Akışı / Toplam Borç",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("operating_cash_flow",),
+        denominator_fields=("total_liabilities",),
+        engine_dependency="cash_flow",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="cash_return_on_assets",
+        category="cash_flow",
+        display_name_tr="Nakit Bazlı Aktif Getirisi",
+        unit="percentage",
+        calculation_strategy="sum_division",
+        numerator_fields=("operating_cash_flow",),
+        denominator_fields=("average_total_assets",),
+        engine_dependency="cash_flow",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="cash_interest_coverage",
+        category="cash_flow",
+        display_name_tr="Nakit Bazlı Faiz Karşılama",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("operating_cash_flow",),
+        denominator_fields=("financing_expenses",),
+        engine_dependency="cash_flow",
+    )
+)
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="operating_cash_flow_ratio",
+        category="cash_flow",
+        display_name_tr="Faaliyet Nakit Akışı / Kısa Vadeli Borç",
+        unit="ratio",
+        calculation_strategy="sum_division",
+        numerator_fields=("operating_cash_flow",),
+        denominator_fields=("short_term_liabilities",),
+        engine_dependency="cash_flow",
+    )
+)
+
+register_ratio_formula(
+    RatioFormulaMetadata(
+        key="sustainable_growth_rate",
+        category="growth",
+        display_name_tr="Sürdürülebilir Büyüme Oranı",
+        unit="percentage",
+        # Katalog/dokümantasyon amaçlı formül -- kâr dağıtım/temettü verisi
+        # HİÇBİR motorda yok, kanuni/varsayılan bir oran (%0 dağıtım gibi)
+        # FABRİKE EDİLMEZ. Orkestrasyon (financial_ratios/service.py) bu
+        # oranı HER ZAMAN, bu strateji hiç çağrılmadan, NOT_CALCULABLE
+        # olarak kısa devre yaptırır (bkz. service.py::
+        # _sustainable_growth_rate_not_calculable_outcome).
+        calculation_strategy="sum_division",
+        numerator_fields=("return_on_equity",),
+        denominator_fields=("dividend_payout_ratio",),
+        depends_on_ratios=("return_on_equity",),
     )
 )
