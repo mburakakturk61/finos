@@ -14,6 +14,7 @@ from app.models.enums import (
     ClassificationStatus,
     DetectedDocumentType,
     DocumentType,
+    ItemReviewDecision,
     PeriodStatus,
     PeriodType,
     ProcessingStatus,
@@ -38,4 +39,5 @@ __all__ = [
     "BatchStatus",
     "DetectedDocumentType",
     "ClassificationStatus",
+    "ItemReviewDecision",
 ]

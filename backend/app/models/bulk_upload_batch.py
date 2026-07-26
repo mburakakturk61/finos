@@ -19,12 +19,19 @@ class BulkUploadBatch(Base):
 
     Bu tablo ve ilişkili BulkUploadItem kayıtları bir "classification
     preview / staging" katmanıdır -- HİÇBİR FİZİKSEL DOSYA İÇERİĞİ
-    saklanmaz, yalnızca metadata ve tespit sonuçları. Company/
-    FinancialPeriod/FinancialDocument (Milestone 2 / Adım 1-2) ile HENÜZ
-    hiçbir ilişkisi yok; kullanıcı onayı sonrası gerçek kayıtlara
-    bağlama ayrı bir sonraki adımdır. Onay anında -- bu adımda dosya
-    saklanmadığı için -- ya dosyaların yeniden yüklenmesi istenecek ya da
-    ileride geçici bir object storage eklenecektir.
+    saklanmaz, yalnızca metadata ve tespit sonuçları.
+
+    Milestone 3 / Adım 1: kullanıcı onayı (confirm) sonrası
+    status=CONFIRMED olur ve bu terminal/immutable bir durumdur -- bir
+    daha confirm edilemez, item'larına bir daha PATCH uygulanamaz. Onay
+    anında -- bu katmanda dosya saklanmadığı için -- confirm isteğinin
+    kendisi accepted item'ların orijinal baytlarını yeniden taşır (bkz.
+    app/services/bulk_upload.py confirm_bulk_upload). Confirm sonrası da
+    fiziksel dosya YİNE saklanmaz; yalnızca üretilen FinancialDocument
+    metadata'sı ve analiz sonucu kalıcı olur, orijinal dosya indirilemez
+    veya yeniden parse edilemez. Kalıcı bir object storage eklenmesi
+    bilinçli olarak bu adımın kapsamı DIŞINDA bırakıldı (bkz. tests/README.md,
+    "Milestone 3 / Adım 1" bölümü) -- açık bir teknik borç.
     """
 
     __tablename__ = "bulk_upload_batches"
@@ -63,6 +70,7 @@ class BulkUploadBatch(Base):
         nullable=False,
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # cascade kasıtlı olarak "delete" içermiyor; silme DB seviyesinde
     # ondelete="RESTRICT" ile yönetiliyor (bkz. BulkUploadItem). Bu adımda

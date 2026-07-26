@@ -42,11 +42,19 @@ class ProcessingStatus(str, enum.Enum):
 
 
 class BatchStatus(str, enum.Enum):
-    """BulkUploadBatch.status için kullanılır (Milestone 2 / Adım 3)."""
+    """
+    BulkUploadBatch.status için kullanılır (Milestone 2 / Adım 3).
+
+    CONFIRMED (Milestone 3 / Adım 1): kullanıcı onayı sonrası tüm accepted
+    item'lar production kayıtlarına dönüştürüldü. Terminal ve immutable --
+    bu duruma ulaşan bir batch'in item'larına bir daha PATCH uygulanamaz ve
+    batch bir daha confirm edilemez.
+    """
 
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CONFIRMED = "confirmed"
 
 
 class DetectedDocumentType(str, enum.Enum):
@@ -77,6 +85,25 @@ class ClassificationStatus(str, enum.Enum):
     DUPLICATE = "duplicate"
     POSSIBLE_DUPLICATE = "possible_duplicate"
     UNRECOGNIZED = "unrecognized"
+
+
+class ItemReviewDecision(str, enum.Enum):
+    """
+    BulkUploadItem.user_decision (Milestone 3 / Adım 1) -- kullanıcının
+    staging item'ı için verdiği KARAR. classification_status'tan (motorun
+    ürettiği tahmin/sonuç) BİLEREK ayrı ve bağımsız bir alan: biri makine
+    çıktısı, diğeri insan kararıdır ve ikisi karıştırılmamalıdır (ör. bir
+    item classification_status=needs_review olsa da kullanıcı onu
+    accepted yapabilir; classification_status=auto_matched olsa da
+    kullanıcı ignored yapabilir).
+
+    Silme (hard delete) YOK -- yalnızca durum geçişi. Bir item asla
+    accepted olmadan production tablolarına yazılmaz.
+    """
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    IGNORED = "ignored"
 
 
 class AnalysisType(str, enum.Enum):

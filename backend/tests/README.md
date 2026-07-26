@@ -126,6 +126,146 @@ pip install -r requirements.txt
 pytest tests/test_classification_unit.py tests/test_bulk_upload_api.py -v
 ```
 
+## 4. Milestone 3 / Adım 1: bulk upload confirmation (review + onay)
+
+- `test_bulk_upload_api.py` (aynı dosyaya eklendi, yeni bölüm): auto_matched
+  item'larda `resolution_json`'ın otomatik ön-doldurulduğu (var olan/yeni
+  firma+dönem taslağı), tek-item `PATCH .../items/{item_id}`, toplu karar
+  `PATCH .../items` (kısmi başarı modeli), ve `POST .../confirm`'in tüm
+  akışları: mutlu yol (Company/FinancialPeriod/FinancialDocument/
+  FinancialAnalysisResult gerçekten oluşuyor mu -- `GET /api/v1/documents/
+  {id}` ve `GET /api/v1/analyses/{id}` ile çapraz doğrulanıyor), aynı
+  confirm çağrısı İÇİNDE ve AYRI batch'ler ARASINDA firma/dönem reuse,
+  eksik dosya (`MISSING_FILE`), checksum uyuşmazlığı (`CHECKSUM_MISMATCH`),
+  motor hatası sonrası HİÇBİR ŞEY yazılmadığının doğrulanması
+  (`ENGINE_FAILED` -- Company sayısı değişmiyor, batch hâlâ `completed`),
+  `(period_id, checksum)` çakışması (`DUPLICATE_DOCUMENT`), confirmed bir
+  batch'in tekrar confirm edilememesi (409) ve item'larına PATCH
+  uygulanamaması (409, immutability), ve ignored item'ların production
+  tablolarına HİÇ yazılmadığının (`resulting_*_id` hepsi null) doğrulanması.
+- `test_bulk_upload_postgres_integration.py` (aynı dosyaya eklendi):
+  `BatchStatus.CONFIRMED` ve tüm `ItemReviewDecision` değerlerinin CHECK
+  constraint'i ihlal etmediği, `resolution_json`'ın native `jsonb` olduğu,
+  ve dört yeni `resulting_*_id` FK'sinin (companies/financial_periods/
+  financial_documents/financial_analysis_results) her biri için RESTRICT
+  silme davranışının ayrı ayrı doğrulanması.
+
+### Migration sorunu ve düzeltmesi: PostgreSQL 63 karakter identifier sınırı
+
+İlk yazılan migration'da (`9d4f1a7c6e52`) dört yeni `resulting_*_id`
+FK'sinin adı, projenin standart naming convention'ıyla (bkz.
+`app/db/base.py`) OTOMATİK üretildiğinde -- `financial_analysis_results`
+gibi uzun referans tablo adlarıyla birleşince -- PostgreSQL'in 63 karakter
+identifier sınırını AŞIYORDU:
+
+```
+fk_bulk_upload_items_resulting_analysis_id_financial_analysis_results  (69 karakter)
+```
+
+Bu, `alembic upgrade head`'in gerçek bir PostgreSQL'e karşı ilk
+çalıştırılmasında fiilen tespit edildi. Düzeltme: dördü de (yalnızca
+sınırı aşan değil, TUTARLILIK için) kısaltılmış, açık bir isimlendirme
+kalıbına geçirildi -- `app/models/bulk_upload_item.py`'deki her
+`ForeignKey(...)` çağrısına açık `name=` verildi (naming convention'ın
+varsayılan üretimini bilerek geçersiz kılar) ve migration'daki
+`op.create_foreign_key`/`op.drop_constraint` çağrıları aynı isimlerle
+güncellendi:
+
+```
+fk_bulk_upload_items_resulting_company    (38 karakter)
+fk_bulk_upload_items_resulting_period     (37 karakter)
+fk_bulk_upload_items_resulting_document   (39 karakter)
+fk_bulk_upload_items_resulting_analysis   (39 karakter)
+```
+
+Projedeki TÜM constraint/index adları (eski + yeni) bu düzeltmeden sonra
+tek tek uzunluk kontrolünden geçirildi; en uzunu 62 karakterdir
+(`fk_bulk_upload_items_resulting_document_id_financial_documents` --
+DÜZELTİLMEDEN ÖNCEki hâliyle), düzeltme sonrası en uzunu 50 karakterdir.
+
+### Confirm multipart sözleşmesi
+
+`POST /api/v1/bulk-uploads/{batch_id}/confirm` iki form alanı alır:
+
+- `manifest` (metin alanı, JSON dizisi): `[{"item_id": "<uuid>",
+  "original_filename": "mizan.xlsx"}, ...]` -- `accepted` durumundaki ve
+  içerik gerektiren (şu an yalnızca `trial_balance`) item'ların TAM
+  listesi. `original_filename` yalnızca bilgi/log amaçlıdır.
+- `files` (tekrarlı dosya alanı): her parçanın dosya ADI (`filename`)
+  -- orijinal dosya adı DEĞİL -- ilgili item_id'nin kendisi (UUID string)
+  olmalıdır. Orijinal dosya adları bir batch içinde tekil olmak zorunda
+  olmadığı için eşleştirme anahtarı olarak güvenilmez; item_id her zaman
+  tekildir.
+
+Örnek (httpx/requests tarzı):
+
+```python
+import json, requests
+
+manifest = json.dumps([
+    {"item_id": "11111111-1111-1111-1111-111111111111", "original_filename": "mizan.xlsx"},
+])
+requests.post(
+    f"{BASE_URL}/api/v1/bulk-uploads/{batch_id}/confirm",
+    data={"manifest": manifest},
+    files=[
+        ("files", ("11111111-1111-1111-1111-111111111111", open("mizan.xlsx", "rb"), XLSX_MIME)),
+    ],
+)
+```
+
+İçerik GEREKTİRMEYEN türler (ör. `corporate_tax_return`, `balance_sheet`)
+için o item'a karşılık gelen bir `files` parçası göndermeye GEREK YOKTUR
+-- `FinancialDocument` staging metadata'sından oluşturulur (henüz
+çalıştırılacak bir motor olmadığı için).
+
+### Fiziksel dosya saklama -- confirm sonrasında da YOK (açık teknik borç)
+
+Confirm, accepted item'lar için orijinal dosya baytının YENİDEN
+gönderilmesini ister (bkz. yukarısı) ve bu baytları yalnızca FAZ 2'de
+(bellekte, `analyze_trial_balance`'a girdi olarak) kullanır -- HİÇBİR
+AŞAMADA diske veya DB'ye yazmaz. Confirm başarıyla tamamlandıktan SONRA
+da orijinal dosya indirilemez veya yeniden parse edilemez; yalnızca
+`FinancialDocument` metadata'sı (ad, checksum, boyut, tür) ve (varsa)
+`FinancialAnalysisResult.result_json` kalıcı olur. Kalıcı bir object
+storage (S3/MinIO vb.) eklenmesi bu adımın kapsamı DIŞINDA bırakıldı --
+açık, kayıtlı bir teknik borçtur; gelecekteki bir milestone'un konusudur.
+
+### Gelecekteki multi-tenant için not (bu adımda uygulanmadı)
+
+`app/services/bulk_upload.py`'deki `_find_or_create_company` gibi
+fonksiyonlar şu an VKN'ye göre TÜM sistemde (global) firma arar. SaaS/
+multi-tenant bir yapı kurulduğunda bu aramanın tenant sınırına
+çekilmesi gerekecektir (aksi halde bir tenant'ın firması başka bir
+tenant'ın yüklemesiyle yanlışlıkla eşleşebilir). Bu milestone'da
+`tenant_id` migration'ı KASITLI OLARAK eklenmedi; yalnızca bu not
+bırakıldı.
+
+### Bu sandbox'ın çalıştırma sınırlaması (değişmedi)
+
+Milestone 2'den bu yana aynı sınırlama geçerli: bu sandbox'ta PyPI ağ
+erişimi, Docker, root/sudo yetkisi ve gerçek bir PostgreSQL YOK; `fastapi`,
+`sqlalchemy`, `alembic`, `psycopg`, `pytest`, `httpx`, `pydantic`, `xlrd`
+kurulu DEĞİL ve kurulamıyor (`pip install` PyPI proxy'sinde 403 ile
+başarısız oluyor). Bu yüzden `alembic upgrade head` ve yukarıdaki yeni
+testler bu ortamda GERÇEKTEN çalıştırılıp doğrulanamadı -- yalnızca (a)
+tüm yeni/değişen dosyalar `python3 -m py_compile` ile sözdizimi
+kontrolünden geçirildi, (b) migration, modellerle satır satır elle
+çapraz kontrol edildi, (c) tüm constraint/index adları programatik
+olarak 63 karakter sınırına karşı tek tek ölçüldü, (d) `app.classification.*`
+ve `app.trial_balance.*` gibi salt pandas/pypdf'e bağımlı, sqlalchemy
+GEREKTİRMEYEN kod yollarındaki testler sandbox-only bir `importlib` stub
+tekniğiyle gerçekten çalıştırıldı (bkz. aşağıdaki final rapor). Yerelde
+gerçek bir yeşil koşu için:
+
+```
+docker compose up -d db
+cd backend
+pip install -r requirements.txt
+alembic upgrade head
+pytest tests/ -v
+```
+
 ## Bilinçli olarak yapılmayan bir şey
 
 `backend/tests/data/generic/2024_detay_mizan.xlsx` gerçek, anonimleştirilmemiş

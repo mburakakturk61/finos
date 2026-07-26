@@ -19,7 +19,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
 
 from app.db.base import Base
-from app.models.enums import ClassificationStatus, DetectedDocumentType, PeriodType
+from app.models.enums import (
+    ClassificationStatus,
+    DetectedDocumentType,
+    ItemReviewDecision,
+    PeriodType,
+)
 
 if TYPE_CHECKING:
     from app.models.bulk_upload_batch import BulkUploadBatch
@@ -37,6 +42,15 @@ class BulkUploadItem(Base):
     kullanıcıya sunulacak bir bulgudur (classification_status=duplicate /
     possible_duplicate). Sert engelleme (409) yalnızca onaylanmış
     FinancialDocument akışında (Milestone 2 / Adım 2) uygulanıyor.
+
+    Milestone 3 / Adım 1: kullanıcının inceleme kararı (user_decision) ve
+    önerdiği/düzenlediği firma-dönem-tür çözümü (resolution_json) burada
+    tutulur. classification_status (motor çıktısı) ile user_decision
+    (insan kararı) BİLEREK ayrı alanlardır. resolution_json hiçbir
+    production tabloya yazma YAPMAZ -- yalnızca confirm anında
+    kullanılacak bir taslaktır. resulting_*_id alanları yalnızca confirm
+    BAŞARILI olduktan sonra dolar; ignored veya hiç confirm edilmemiş bir
+    item'da bunlar her zaman NULL kalır.
     """
 
     __tablename__ = "bulk_upload_items"
@@ -117,6 +131,80 @@ class BulkUploadItem(Base):
         JSON().with_variant(JSONB(), "postgresql"),
         nullable=False,
         default=dict,
+    )
+
+    # Kullanıcının kararı (Milestone 3 / Adım 1) -- classification_status
+    # (yukarıda) ile KARIŞTIRILMAMALI, bkz. class docstring.
+    user_decision: Mapped[ItemReviewDecision] = mapped_column(
+        Enum(
+            ItemReviewDecision,
+            name="ck_bulk_upload_items_user_decision",
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=ItemReviewDecision.PENDING,
+    )
+
+    # Kullanıcının (veya auto_matched item'lar için otomatik ön-doldurmanın)
+    # önerdiği firma/dönem/belge türü taslağı. Şekli app.schemas.bulk_upload
+    # içindeki Pydantic şemalarıyla (ItemResolutionCompany/Period) doğrulanır
+    # -- detection_evidence_json/warnings_json gibi DB seviyesinde
+    # zorlanmıyor, uygulama katmanında. confirm bu alanı OKUR, hiçbir zaman
+    # tek başına production tablosuna yazmaz.
+    resolution_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=True,
+    )
+
+    # Yalnızca confirm BAŞARILI olduktan sonra dolar (audit izi). RESTRICT --
+    # bu kayıtlar asla CASCADE ile silinemez.
+    #
+    # ForeignKey(name=...) BİLEREK açıkça verildi: naming convention'ın
+    # varsayılan üretimi (fk_bulk_upload_items_resulting_<kolon>_<referans
+    # tablo>) "financial_analysis_results" gibi uzun tablo adlarıyla
+    # PostgreSQL'in 63 karakter identifier sınırını AŞIYOR (69 karaktere
+    # çıkıyordu). Dördü de -- yalnızca sınırı aşan değil -- tutarlılık için
+    # aynı kısaltılmış "fk_bulk_upload_items_resulting_<hedef>" kalıbını
+    # kullanır (referans tablo adı isimden bilerek çıkarıldı; kolon adının
+    # kendisi zaten hedefi açıkça belirtiyor).
+    resulting_company_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "companies.id",
+            ondelete="RESTRICT",
+            name="fk_bulk_upload_items_resulting_company",
+        ),
+        index=True,
+    )
+    resulting_period_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "financial_periods.id",
+            ondelete="RESTRICT",
+            name="fk_bulk_upload_items_resulting_period",
+        ),
+        index=True,
+    )
+    resulting_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "financial_documents.id",
+            ondelete="RESTRICT",
+            name="fk_bulk_upload_items_resulting_document",
+        ),
+        index=True,
+    )
+    resulting_analysis_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "financial_analysis_results.id",
+            ondelete="RESTRICT",
+            name="fk_bulk_upload_items_resulting_analysis",
+        ),
+        index=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
