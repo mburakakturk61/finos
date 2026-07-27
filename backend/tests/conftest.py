@@ -3,10 +3,13 @@ SQLite in-memory fixture'ları. Kapsam: API sözleşmesi testleri.
 PostgreSQL'e özgü davranışlar için bkz. test_postgres_integration.py ve
 tests/README.md.
 
-Ayrıca (Milestone 4.3D final doğrulama): `RATIO_REGISTRY` / `BENCHMARK_
-REGISTRY` / `RATIO_SCORE_WEIGHTS` gibi process-genelinde PAYLAŞILAN global
-mutable registry yapıları için autouse bir "snapshot + kesin geri yükleme"
-fixture'ı -- bkz. aşağıdaki `_snapshot_shared_engine_registries`.
+Ayrıca (Milestone 4.3D final doğrulama + Milestone 4.3E Adım 12): `RATIO_
+REGISTRY` / `BENCHMARK_REGISTRY` / `RATIO_SCORE_WEIGHTS` / `CREDIT_RATIO_
+SCORE_WEIGHTS` / `CREDIT_CATEGORY_WEIGHT_PROFILES` / `CREDIT_HARD_FAIL_
+RULES` / `CREDIT_CRITICAL_OVERRIDE_RULES` / `CREDIT_BANKING_LENS_SIGNAL_
+RULES` gibi process-genelinde PAYLAŞILAN global registry yapıları için
+autouse bir "snapshot + kesin geri yükleme" fixture'ı -- bkz. aşağıdaki
+`_snapshot_shared_engine_registries`.
 
 **ÖNEMLİ (import sırası düzeltmesi):** `app.engines.common.health_score_
 registry`, modül seviyesinde `_build_ratio_score_weights()` çalıştırır --
@@ -26,6 +29,19 @@ patlıyordu. Bu, production hesaplama hatası DEĞİL, yalnızca bu dosyanın
 kendi import sırası hatasıydı. Çözüm: üç modülü de burada, DOĞRU sırayla
 (ratio_formulas -> benchmark_registry -> health_score_registry) ve
 LAZY olarak (fixture GÖVDESİNDE, modül seviyesinde DEĞİL) import etmek.
+
+**Milestone 4.3E Adım 12 eklentisi:** `app.engines.common.credit_score_
+registry`, modül seviyesinde `_build_credit_ratio_score_weights()` +
+`CREDIT_HARD_FAIL_RULES`/`CREDIT_CRITICAL_OVERRIDE_RULES`/`CREDIT_
+BANKING_LENS_SIGNAL_RULES` kayıt-anı doğrulamalarını çalıştırır -- bu da
+`BENCHMARK_REGISTRY`'nin (Health Score ile AYNI kök neden) ZATEN dolu
+olmasını gerektirir. Bu yüzden `credit_score_registry` importu da AYNI
+disiplinle -- LAZY (fixture gövdesinde) ve `benchmark_registry`'den
+SONRA -- eklenir. `credit_score_registry`, `health_score_registry`'ye
+BAĞIMLI DEĞİLDİR (yalnızca `benchmark_types`/`credit_score_types`'a
+bağımlıdır) -- ama tutarlılık için import sırası, bu dosyadaki mevcut
+sırayı KORUYARAK genişletilir (ratio_formulas -> benchmark_registry ->
+benchmark_types -> health_score_registry -> credit_score_registry).
 """
 
 from collections.abc import Generator
@@ -85,10 +101,24 @@ def _snapshot_shared_engine_registries() -> Generator[None, None, None]:
     import app.engines.common.benchmark_registry  # noqa: F401 -- BENCHMARK_REGISTRY'yi 48 gerçek kayıtla YAN ETKİ olarak doldurur
     import app.engines.common.benchmark_types as benchmark_types_module
     import app.engines.common.health_score_registry as health_score_registry_module
+    import app.engines.common.credit_score_registry as credit_score_registry_module
 
     ratio_registry_snapshot = dict(ratio_formulas_module.RATIO_REGISTRY)
     benchmark_registry_snapshot = dict(benchmark_types_module.BENCHMARK_REGISTRY)
     ratio_score_weights_snapshot = dict(health_score_registry_module.RATIO_SCORE_WEIGHTS)
+    credit_ratio_score_weights_snapshot = dict(
+        credit_score_registry_module.CREDIT_RATIO_SCORE_WEIGHTS
+    )
+    credit_category_weight_profiles_snapshot = dict(
+        credit_score_registry_module.CREDIT_CATEGORY_WEIGHT_PROFILES
+    )
+    credit_hard_fail_rules_snapshot = credit_score_registry_module.CREDIT_HARD_FAIL_RULES
+    credit_critical_override_rules_snapshot = (
+        credit_score_registry_module.CREDIT_CRITICAL_OVERRIDE_RULES
+    )
+    credit_banking_lens_signal_rules_snapshot = (
+        credit_score_registry_module.CREDIT_BANKING_LENS_SIGNAL_RULES
+    )
     try:
         yield
     finally:
@@ -98,6 +128,25 @@ def _snapshot_shared_engine_registries() -> Generator[None, None, None]:
         benchmark_types_module.BENCHMARK_REGISTRY.update(benchmark_registry_snapshot)
         health_score_registry_module.RATIO_SCORE_WEIGHTS.clear()
         health_score_registry_module.RATIO_SCORE_WEIGHTS.update(ratio_score_weights_snapshot)
+        credit_score_registry_module.CREDIT_RATIO_SCORE_WEIGHTS.clear()
+        credit_score_registry_module.CREDIT_RATIO_SCORE_WEIGHTS.update(
+            credit_ratio_score_weights_snapshot
+        )
+        credit_score_registry_module.CREDIT_CATEGORY_WEIGHT_PROFILES.clear()
+        credit_score_registry_module.CREDIT_CATEGORY_WEIGHT_PROFILES.update(
+            credit_category_weight_profiles_snapshot
+        )
+        # Bu üçü TUPLE (immutable) -- clear()/update() UYGULANAMAZ. Bir
+        # test modül attribute'unu (ör. `credit_score_registry_module.
+        # CREDIT_HARD_FAIL_RULES = ...`) yeniden ATASA bile, referansı
+        # snapshot'takine GERİ ATAYARAK aynı garanti sağlanır.
+        credit_score_registry_module.CREDIT_HARD_FAIL_RULES = credit_hard_fail_rules_snapshot
+        credit_score_registry_module.CREDIT_CRITICAL_OVERRIDE_RULES = (
+            credit_critical_override_rules_snapshot
+        )
+        credit_score_registry_module.CREDIT_BANKING_LENS_SIGNAL_RULES = (
+            credit_banking_lens_signal_rules_snapshot
+        )
 
 
 @pytest.fixture()
