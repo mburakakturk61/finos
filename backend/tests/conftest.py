@@ -42,6 +42,22 @@ BAĞIMLI DEĞİLDİR (yalnızca `benchmark_types`/`credit_score_types`'a
 bağımlıdır) -- ama tutarlılık için import sırası, bu dosyadaki mevcut
 sırayı KORUYARAK genişletilir (ratio_formulas -> benchmark_registry ->
 benchmark_types -> health_score_registry -> credit_score_registry).
+
+**Milestone 4.3F eklentisi (Recommendation Engine, Adım 13):**
+`app.engines.common.recommendation_registry`, modül seviyesinde
+`register_recommendation_rule()` (39 kural) + `_validate_cross_rule_
+references()` kayıt-anı doğrulamalarını çalıştırır -- bu da `RATIO_
+REGISTRY`'nin (related_ratio_codes çapraz doğrulaması için) ZATEN dolu
+olmasını gerektirir. Bölüm 1.6'nın ZORUNLU import sırası gereği bu modül
+`credit_score_registry`'den SONRA, HER ZAMAN EN SON import edilir:
+`ratio_formulas -> benchmark_registry -> benchmark_types ->
+health_score_registry -> credit_score_registry ->
+recommendation_registry`. `RECOMMENDATION_RULES`/`RECOMMENDATION_
+CONFLICT_PAIRS` `tuple` (immutable, referans yeniden atamayla restore
+edilir); `RECOMMENDATION_CATEGORY_WEIGHT_PROFILES`/`BANKING_FLAG_TO_
+RATIO_OVERLAP` `dict` (mutable, `clear()+update()` ile restore edilir).
+Restore AŞAMASI (finally bloğu), snapshot sırasının TERSİ (LIFO) --
+Recommendation Engine EN SON import edildiği için EN ÖNCE restore edilir.
 """
 
 from collections.abc import Generator
@@ -102,6 +118,7 @@ def _snapshot_shared_engine_registries() -> Generator[None, None, None]:
     import app.engines.common.benchmark_types as benchmark_types_module
     import app.engines.common.health_score_registry as health_score_registry_module
     import app.engines.common.credit_score_registry as credit_score_registry_module
+    import app.engines.common.recommendation_registry as recommendation_registry_module
 
     ratio_registry_snapshot = dict(ratio_formulas_module.RATIO_REGISTRY)
     benchmark_registry_snapshot = dict(benchmark_types_module.BENCHMARK_REGISTRY)
@@ -119,9 +136,47 @@ def _snapshot_shared_engine_registries() -> Generator[None, None, None]:
     credit_banking_lens_signal_rules_snapshot = (
         credit_score_registry_module.CREDIT_BANKING_LENS_SIGNAL_RULES
     )
+    recommendation_rules_by_code_snapshot = dict(
+        recommendation_registry_module.RECOMMENDATION_RULES_BY_CODE
+    )
+    recommendation_rules_snapshot = recommendation_registry_module.RECOMMENDATION_RULES
+    recommendation_conflict_pairs_snapshot = (
+        recommendation_registry_module.RECOMMENDATION_CONFLICT_PAIRS
+    )
+    recommendation_mutually_exclusive_groups_snapshot = (
+        recommendation_registry_module.RECOMMENDATION_MUTUALLY_EXCLUSIVE_GROUPS
+    )
+    recommendation_category_weight_profiles_snapshot = dict(
+        recommendation_registry_module.RECOMMENDATION_CATEGORY_WEIGHT_PROFILES
+    )
+    banking_flag_to_ratio_overlap_snapshot = dict(
+        recommendation_registry_module.BANKING_FLAG_TO_RATIO_OVERLAP
+    )
     try:
         yield
     finally:
+        # LIFO -- Recommendation Engine (4.3F) EN SON import edildiği için
+        # EN ÖNCE restore edilir.
+        recommendation_registry_module.RECOMMENDATION_RULES_BY_CODE.clear()
+        recommendation_registry_module.RECOMMENDATION_RULES_BY_CODE.update(
+            recommendation_rules_by_code_snapshot
+        )
+        recommendation_registry_module.RECOMMENDATION_RULES = recommendation_rules_snapshot
+        recommendation_registry_module.RECOMMENDATION_CONFLICT_PAIRS = (
+            recommendation_conflict_pairs_snapshot
+        )
+        recommendation_registry_module.RECOMMENDATION_MUTUALLY_EXCLUSIVE_GROUPS = (
+            recommendation_mutually_exclusive_groups_snapshot
+        )
+        recommendation_registry_module.RECOMMENDATION_CATEGORY_WEIGHT_PROFILES.clear()
+        recommendation_registry_module.RECOMMENDATION_CATEGORY_WEIGHT_PROFILES.update(
+            recommendation_category_weight_profiles_snapshot
+        )
+        recommendation_registry_module.BANKING_FLAG_TO_RATIO_OVERLAP.clear()
+        recommendation_registry_module.BANKING_FLAG_TO_RATIO_OVERLAP.update(
+            banking_flag_to_ratio_overlap_snapshot
+        )
+
         ratio_formulas_module.RATIO_REGISTRY.clear()
         ratio_formulas_module.RATIO_REGISTRY.update(ratio_registry_snapshot)
         benchmark_types_module.BENCHMARK_REGISTRY.clear()
