@@ -58,6 +58,14 @@ edilir); `RECOMMENDATION_CATEGORY_WEIGHT_PROFILES`/`BANKING_FLAG_TO_
 RATIO_OVERLAP` `dict` (mutable, `clear()+update()` ile restore edilir).
 Restore AŞAMASI (finally bloğu), snapshot sırasının TERSİ (LIFO) --
 Recommendation Engine EN SON import edildiği için EN ÖNCE restore edilir.
+
+**Milestone 4.4 eklentisi (Executive Report Engine, Adım 6):** `app.engines.
+common.report_registry` (18 section + 7 report type + legal/confidentiality
+matrisi) ve `app.engines.common.dashboard_registry` (10 widget) de modül
+seviyesinde kayıt-anı doğrulaması çalıştırır. Bu ikisi `recommendation_
+registry`'ye BAĞIMLI DEĞİLDİR (yalnızca `report_types`/`dashboard_types`'a
+bağımlıdır) ama tutarlılık için EN SON import edilir, LIFO restore'da EN
+ÖNCE geri yüklenir.
 """
 
 from collections.abc import Generator
@@ -119,6 +127,8 @@ def _snapshot_shared_engine_registries() -> Generator[None, None, None]:
     import app.engines.common.health_score_registry as health_score_registry_module
     import app.engines.common.credit_score_registry as credit_score_registry_module
     import app.engines.common.recommendation_registry as recommendation_registry_module
+    import app.engines.common.report_registry as report_registry_module
+    import app.engines.common.dashboard_registry as dashboard_registry_module
 
     ratio_registry_snapshot = dict(ratio_formulas_module.RATIO_REGISTRY)
     benchmark_registry_snapshot = dict(benchmark_types_module.BENCHMARK_REGISTRY)
@@ -152,10 +162,33 @@ def _snapshot_shared_engine_registries() -> Generator[None, None, None]:
     banking_flag_to_ratio_overlap_snapshot = dict(
         recommendation_registry_module.BANKING_FLAG_TO_RATIO_OVERLAP
     )
+
+    # Milestone 4.4 eklentisi (Executive Report Engine, Adım 6): `app.engines.
+    # common.report_registry`/`app.engines.common.dashboard_registry` da modül
+    # seviyesinde kayıt-anı doğrulaması çalıştırır (18 section + 7 report type +
+    # 10 widget). Bu iki modül `recommendation_registry`'ye BAĞIMLI DEĞİLDİR
+    # (yalnızca `report_types`/`dashboard_types`'a bağımlıdır) -- ama tutarlılık
+    # için EN SON eklenir, LIFO restore'da EN ÖNCE geri yüklenir.
+    report_section_registry_snapshot = dict(report_registry_module.REPORT_SECTION_REGISTRY)
+    report_type_registry_snapshot = dict(report_registry_module.REPORT_TYPE_REGISTRY)
+    report_type_legal_profiles_snapshot = dict(report_registry_module.REPORT_TYPE_LEGAL_PROFILES)
+    dashboard_widget_registry_snapshot = dict(dashboard_registry_module.DASHBOARD_WIDGET_REGISTRY)
+
     try:
         yield
     finally:
-        # LIFO -- Recommendation Engine (4.3F) EN SON import edildiği için
+        # LIFO -- Milestone 4.4 registry'leri (report_registry/dashboard_
+        # registry) EN SON import edildiği için EN ÖNCE restore edilir.
+        report_registry_module.REPORT_SECTION_REGISTRY.clear()
+        report_registry_module.REPORT_SECTION_REGISTRY.update(report_section_registry_snapshot)
+        report_registry_module.REPORT_TYPE_REGISTRY.clear()
+        report_registry_module.REPORT_TYPE_REGISTRY.update(report_type_registry_snapshot)
+        report_registry_module.REPORT_TYPE_LEGAL_PROFILES.clear()
+        report_registry_module.REPORT_TYPE_LEGAL_PROFILES.update(report_type_legal_profiles_snapshot)
+        dashboard_registry_module.DASHBOARD_WIDGET_REGISTRY.clear()
+        dashboard_registry_module.DASHBOARD_WIDGET_REGISTRY.update(dashboard_widget_registry_snapshot)
+
+        # LIFO (devam) -- Recommendation Engine (4.3F) EN SON import edildiği için
         # EN ÖNCE restore edilir.
         recommendation_registry_module.RECOMMENDATION_RULES_BY_CODE.clear()
         recommendation_registry_module.RECOMMENDATION_RULES_BY_CODE.update(
