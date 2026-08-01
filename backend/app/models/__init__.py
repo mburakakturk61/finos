@@ -6,6 +6,7 @@ buraya da eklenmesi gerekir.
 
 from app.models.bulk_upload_batch import BulkUploadBatch
 from app.models.bulk_upload_item import BulkUploadItem
+from app.models.analysis_run_scope_claim import AnalysisRunScopeClaim
 from app.models.company import Company
 from app.models.enums import (
     AnalysisSourceRole,
@@ -60,4 +61,5 @@ __all__ = [
     "OrchestrationPhysicalObject",
     "OrchestrationArtifactLocation",
     "OrchestrationError",
+    "AnalysisRunScopeClaim",
 ]
