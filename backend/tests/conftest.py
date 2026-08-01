@@ -66,6 +66,18 @@ seviyesinde kayıt-anı doğrulaması çalıştırır. Bu ikisi `recommendation_
 registry`'ye BAĞIMLI DEĞİLDİR (yalnızca `report_types`/`dashboard_types`'a
 bağımlıdır) ama tutarlılık için EN SON import edilir, LIFO restore'da EN
 ÖNCE geri yüklenir.
+
+**Milestone 5.0A eklentisi (Analysis Orchestrator, Bölüm 65):**
+`app.engines.analysis_orchestrator.registry.ENGINE_DEPENDENCY_REGISTRY`
+(10 motor kodu + 24 kenar) de modül seviyesinde kayıt-anı doğrulaması
+(`validate_dependency_registry`) çalıştırır. Bu registry diğerlerine
+BAĞIMLI DEĞİLDİR (yalnızca `analysis_orchestrator.types`'a bağımlıdır) --
+ama tutarlılık için EN SON eklenir, LIFO restore'da EN ÖNCE geri yüklenir.
+`app.engines.analysis_orchestrator.dispatch.ORCHESTRATOR_ENGINE_DISPATCH`
+bir "registry" DEĞİLDİR (kayıt-doğrulama mantığı taşımaz, yalnızca sabit
+import-zamanı bağlamalardır) -- testler tek tek callable'ları
+`unittest.mock.patch.dict` ile geçici olarak değiştirir, bu fixture'a
+GEREK DUYMAZ (Bölüm 65).
 """
 
 from collections.abc import Generator
@@ -129,6 +141,7 @@ def _snapshot_shared_engine_registries() -> Generator[None, None, None]:
     import app.engines.common.recommendation_registry as recommendation_registry_module
     import app.engines.common.report_registry as report_registry_module
     import app.engines.common.dashboard_registry as dashboard_registry_module
+    import app.engines.analysis_orchestrator.registry as orchestrator_registry_module
 
     ratio_registry_snapshot = dict(ratio_formulas_module.RATIO_REGISTRY)
     benchmark_registry_snapshot = dict(benchmark_types_module.BENCHMARK_REGISTRY)
@@ -174,9 +187,22 @@ def _snapshot_shared_engine_registries() -> Generator[None, None, None]:
     report_type_legal_profiles_snapshot = dict(report_registry_module.REPORT_TYPE_LEGAL_PROFILES)
     dashboard_widget_registry_snapshot = dict(dashboard_registry_module.DASHBOARD_WIDGET_REGISTRY)
 
+    # Milestone 5.0A eklentisi (Bölüm 65): ENGINE_DEPENDENCY_REGISTRY en
+    # son import edilir, LIFO restore'da en önce geri yüklenir.
+    orchestrator_registry_snapshot = dict(orchestrator_registry_module.ENGINE_DEPENDENCY_REGISTRY)
+
     try:
         yield
     finally:
+        orchestrator_registry_module.ENGINE_DEPENDENCY_REGISTRY.clear()
+        orchestrator_registry_module.ENGINE_DEPENDENCY_REGISTRY.update(orchestrator_registry_snapshot)
+        try:
+            from app.engines.analysis_orchestrator.execution_plan import _reset_plan_cache_for_tests
+
+            _reset_plan_cache_for_tests()
+        except ImportError:  # pragma: no cover
+            pass
+
         # LIFO -- Milestone 4.4 registry'leri (report_registry/dashboard_
         # registry) EN SON import edildiği için EN ÖNCE restore edilir.
         report_registry_module.REPORT_SECTION_REGISTRY.clear()
