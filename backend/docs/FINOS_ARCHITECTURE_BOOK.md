@@ -1,12 +1,12 @@
-# FINOS Architecture Book v1
+# FINOS Architecture Book v1.2
 
 **FINOS Constitution — Tek Resmi Mimari Referans**
 
 | | |
 |---|---|
 | Doküman durumu | ONAYLANMIŞ — Resmi Referans |
-| Versiyon | 1.1.0 |
-| Kapsadığı sistem durumu | Milestone 1 → Milestone 5.0A (Docker doğrulanmış: 971/971 test) |
+| Versiyon | 1.2.0 |
+| Kapsadığı sistem durumu | Milestone 1 → Milestone 5.0B (Docker doğrulanmış: 998 passed, 0 failed, 0 skipped) |
 | Bu dokümanın rolü | Bundan sonra yazılacak **her** milestone'un bağlayıcı referans kaynağı |
 | Değiştirme yetkisi | Yalnızca açık kullanıcı onayı ile, ayrı bir revizyon turunda |
 | "FINOS" ifadesinin statüsü | **Yalnızca dahili geliştirme kod adıdır** — nihai ticari marka/ürün adı değildir (bkz. Bölüm 0) |
@@ -17,7 +17,7 @@
 
 Bu doküman, FINOS platformunun mimarisini anlatan tek resmi kaynaktır. Milestone tasarım dokümanları (`docs/FINOS_MILESTONE_*_DESIGN.md`), belirli bir motorun veya özelliğin ayrıntılı tasarımını taşır; bu kitap ise onların hepsinin uyduğu **üst düzey, kalıcı kuralları** taşır. Bir milestone tasarım dokümanı ile bu kitap çelişirse, bu kitap bağlayıcıdır — çelişki bir tasarım hatası olarak ele alınır ve çözülür.
 
-Bu kitap **icat edilmiş** bir mimari değildir. FINOS'un bugüne kadar inşa edilmiş, testleri gerçek bir Docker ortamında 971/971 yeşil dönen dokuz finansal engine'inin ve bunları koordine eden Analysis Orchestrator katmanının (Milestone 5.0A) davranışını, kurallarını ve sözleşmelerini olduğu gibi kayda geçirir. Her madde, kod tabanında halihazırda uygulanmış bir gerçeği tarif eder; hiçbir madde henüz var olmayan bir davranışı vaat etmez.
+Bu kitap **icat edilmiş** bir mimari değildir. FINOS'un bugüne kadar inşa edilmiş, testleri gerçek bir Docker ortamında 998 passed, 0 failed, 0 skipped sonucu veren dokuz finansal engine'inin, bunları koordine eden saf Analysis Orchestrator katmanının (Milestone 5.0A) ve Orchestration Persistence & Recovery Foundation katmanının (Milestone 5.0B) davranışını, kurallarını ve sözleşmelerini olduğu gibi kayda geçirir. Her madde, kod tabanında halihazırda uygulanmış bir gerçeği tarif eder; hiçbir madde henüz var olmayan bir davranışı vaat etmez.
 
 Bu kitabı okuyan biri — insan veya gelecekteki bir implementasyon turu — şu soruların cevabını burada bulmalıdır: *Bir motor ne yapar, ne yapmaz? Yeni bir motor nasıl eklenir? Bir registry nasıl büyütülür? Hangi işlemler kesinlikle yasaktır? Bir milestone ne zaman "tamamlanmış" sayılır?*
 
@@ -181,6 +181,39 @@ FINOS backend'i, FastAPI tabanlı bir Python servisidir (`fastapi`, `uvicorn`, `
 `app/engines/common/**`, tüm engine'lerin paylaştığı tip tanımlarını (`*_types.py`) ve registry'leri (`*_registry.py`) barındıran ortak kütüphanedir. Hiçbir engine, başka bir engine'in `service.py` iç uygulamasını import etmez — yalnızca `common/` üzerinden paylaşılan sözleşmeleri (contracts) ve doğrudan yukarı akış (upstream) sonuç nesnelerini kullanır.
 
 **Koordinasyon alt-katmanı — Analysis Orchestrator (Milestone 5.0A):** Dokuz finansal engine'in ÜZERİNDE, kendisi **hiçbir finansal hesaplama yapmayan** bir koordinasyon alt-katmanı bulunur: `app/engines/analysis_orchestrator/`. Bu katman, dokuz motoru Bölüm 3'teki bağımlılık grafiğine göre doğru sırada, doğru girdilerle çağırır, her birinin durumunu gözlemler ve tek bir run-seviyeli sonuç (`OrchestrationRunResult`) üretir — hiçbir motorun sonucunu değiştirmez, hiçbir değeri yeniden hesaplamaz, hiçbir yeni finansal yargı üretmez. Bu ayrım, Bölüm 1'deki katmanlı sorumluluk ilkesinin doğrudan bir uzantısıdır: dokuz motor **NEYİN** hesaplanacağını, Orchestrator yalnızca **NE ZAMAN** ve **HANGİ SIRADA** çağrılacağını belirler. Orchestrator, motorları `ORCHESTRATOR_ENGINE_DISPATCH` adlı, import-zamanında doğrudan Python fonksiyon referanslarıyla doldurulan sabit bir eşlemeyle çağırır — hiçbir dinamik/string-tabanlı çözümleme kullanmaz (bkz. Bölüm 6, Bölüm 18-19).
+
+**Orchestration Persistence & Recovery Foundation (Milestone 5.0B):** `app/orchestration_persistence/`, tamamlanmış 5.0A run sonuçlarını kalıcılaştıran, motor bazlı immutable audit history oluşturan ve önceki bir run'dan 5.0A `PreviousExecutionSnapshot` sözleşmesini yeniden kuran ayrı application/persistence katmanıdır. Saf `app/engines/analysis_orchestrator/` altında SQLAlchemy veya persistence importu yoktur; 5.0A public sözleşmeleri ve Orchestrator davranışı değişmeden kalır. Bağımlılık yalnız dıştan içe akar: application service saf Orchestrator'ı çağırır, sonucunu repository üzerinden yazar ve gerektiğinde snapshot builder ile resume girdisini hazırlar; Orchestrator bu bileşenleri bilmez.
+
+Bu foundation'ın sınırları şöyledir:
+
+- **Persistence Application Service:** caller-neutral `execute → optional resume snapshot → persist terminal run` akışını koordine eder; HTTP, queue veya scheduler sözleşmesi taşımaz.
+- **Repository:** SQLAlchemy/PostgreSQL transaction sınırıdır; terminal run, engine execution kayıtları, structured error kayıtları ve bunların canonical result-owner bağlarını tek DB transaction'ında kalıcılaştırır.
+- **Snapshot Builder:** yalnız persistence kayıtlarından ve doğrulanmış owner payload'larından 5.0A `PreviousExecutionSnapshot`/`PreviousEngineSnapshot` nesnelerini materialize eder.
+- **Artifact Store / Blob Store sınırı:** deterministic canonical JSON codec, SHA-256 bütünlük kontrolü ve inline/external tier seçimini sahiplenir. `BlobStorePort` provider-neutral'dır; mevcut reference adapter durable filesystem kullanır.
+
+**Persistence modelleri ve tablo sahipliği:** `orchestration_runs` run identity, request fingerprint, terminal status/versions ve terminal content digest'in; `orchestration_engine_executions` sıralı motor execution metadata'sı, input fingerprint, owner FK ve reuse lineage'ın; `orchestration_errors` structured error history'sinin; `orchestration_artifacts` finansal olmayan canonical payload ve digest'in; `orchestration_physical_objects` external blob metadata'sının sahibidir. `orchestration_artifact_locations`, canonical artifact/object satırlarını değiştirmeden fiziksel konum indirection'ı için ayrılmış mutable pointer tablosudur. Milestone 5.0B migration head'i `4f9d2a6b8c10`'dur.
+
+**Storage Ownership Matrix — tek payload sahibi ilkesi:**
+
+| Veri / payload | Tek canonical sahip | Yalnız referanslayan kayıt |
+|---|---|---|
+| Run identity, request fingerprint, terminal status ve orchestration versions | `orchestration_runs` | History/application projection'ları |
+| BS, IS ve Ratio payload'ları | `financial_analysis_results` | `orchestration_engine_executions.financial_analysis_result_id` |
+| Benchmark, Health Score, Credit Score, Recommendation, Executive Report, Dashboard ve Render Contract payload'ları | `orchestration_artifacts` | `orchestration_engine_executions.artifact_id` |
+| External payload byte'ları | Blob store; metadata sahibi `orchestration_physical_objects` | `orchestration_artifacts.physical_object_id` ve location indirection |
+| Structured execution error'ları | `orchestration_errors` | Run/execution FK'leri |
+
+Bir engine result payload'ı hem `financial_analysis_results` hem `orchestration_artifacts` içinde tutulmaz; execution satırı payload kopyalamaz, tam olarak bir owner FK taşır. `FinancialAnalysisResult` ile yeni execution/artifact kayıtları arasında ikinci bir source of truth oluşturulmaz. Bu model **event sourcing değildir**: ara state/event stream, replay veya CQRS read model yoktur; yalnız immutable terminal run ve engine audit history vardır.
+
+**Idempotency, resume ve fail-closed bütünlük:** `orchestration_runs.run_id` DB'de unique'dir. Aynı `run_id`, yalnız authoritative `request_fingerprint` ve canonical `terminal_content_digest` de aynıysa mevcut immutable sonucu idempotent biçimde döndürür; aynı `run_id` + farklı fingerprint veya farklı terminal içerik fail-closed `RUN_ID_CONFLICT` ile reddedilir. Resume sırasında target company/period scope'u önceki run ile birebir eşleşmeli ve source run terminal olmalıdır. Her reused engine binding'i source execution, owner FK (`artifact_id` veya `financial_analysis_result_id`), canonical digest, engine code, engine schema/model version, input fingerprint ve fingerprint schema version ile doğrulanır; lineage cycle, eksik owner veya transitive corruption sessiz fallback olmadan structured persistence error üretir ve yazma reddedilir.
+
+Snapshot builder, BS/IS için 5.0A `result_ref` semantiğini korur: outcome içindeki status, source mode, result JSON, error message ve trial-balance usage birlikte yeniden kurulur. Execution'ın `inner_status` değeri ile structured error kayıtları ayrıca immutable execution/error history içinde korunur. Financial owner payload'ı yalnız ham JSON'dan varsayımla kurulmaz: owner scope/type/provenance bilgisi ve kalıcı canonical digest doğrulanır. Artifact yüklemede de canonical byte'ların SHA-256 digest'i decode öncesinde doğrulanır; uyuşmazlıkta snapshot üretilmez.
+
+**Payload tier ve crash güvenliği:** Canonical JSON payload `<= 256 KiB` ise ve run'ın birikimli inline payload'ı `<= 1 MiB` kalıyorsa JSONB içinde tutulabilir; bu sınırların dışındaki payload external blob'a gider. External yazma `staging → byte-size/SHA-256 verification → content-addressed READY publish → DB binding` sırasını izler; terminal DB kaydı hiçbir zaman staging veya doğrulanmamış locator göstermez. PostgreSQL trigger'ları `orchestration_runs`, `orchestration_engine_executions`, `orchestration_errors`, `orchestration_artifacts` ve `orchestration_physical_objects` tablolarında gerçek `UPDATE` ve `DELETE` işlemlerini reddeder; location indirection bilinçli olarak bu immutable canonical kümenin dışındadır.
+
+**5.0B kapsam sınırı:** API/router, queue, background worker, scheduler, batch runner, CLI ve UI eklenmemiştir. Event sourcing, checkpoint/job lifecycle, automatic retry ve orphan/blob cleanup worker'ı da bu milestone'un parçası değildir.
+
+**Future Hardening (blocking değildir; sonraki milestone'larda ayrı tasarım/onay gerektirir):** locator relocation için tam compare-and-swap operasyonu ve retention/orphan reconciliation; cloud object-store adapter'ı; application service'in concrete adapter tiplerinden yalnız port protokollerine geçirilmesi; binary/PDF artifact writer'ları; directory-level filesystem durability (`fsync`) güçlendirmesi; exotic map/union ve non-finite float codec kurallarının sıkılaştırılması; ek FK/query-plan index incelemesi; structured error alanları için daha dar allowlist. Bu maddeler mevcut 5.0B terminal persistence/recovery sözleşmesinin parçası olarak vaat edilmez.
 
 API katmanı ile engine katmanı arasındaki köprü, `app/engines/protocol.py`'de tanımlı `EngineSourceRef`/`EngineRunContext` sözleşme katmanıdır (Milestone 4.1+). Bu dosya, kalıcılık katmanının engine sonuçlarını nasıl referanslayacağını tanımlar; engine'lerin kendisi bu sözleşmeye bağımlı değildir — bağımlılık tek yönlüdür (API → engine, asla tersi değil).
 
@@ -531,9 +564,9 @@ FINOS iki paralel test rejimi kullanır:
 
 **A. Sandbox test rejimi** (bu konuşma/implementasyon ortamında kullanılır): `sqlalchemy`/`fastapi`/`pydantic` paketleri PyPI proxy'den kurulamadığı için, `app.models` için `sys.modules`'e önceden kaydedilen bir stub namespace paketi tekniğiyle, `app/models/__init__.py`'nin eager ORM importlarını hiç çalıştırmadan yalnızca `app.engines.**` (SIFIR sqlalchemy bağımlılığı) testlerini gerçekten çalıştırmak mümkündür (`run_tests.py`). Bu rejim, hızlı geri bildirim döngüsü için kullanılır ama **nihai kabul kriteri değildir.**
 
-**B. Gerçek Docker test rejimi** (nihai kabul kriteri): `PYTHONPATH=/app python -m pytest tests/ -v`, tam bağımlılık kurulu gerçek bir konteynerde çalıştırılır. **Hiçbir milestone, gerçek Docker ortamında `0 failed` sonucu görülmeden "tamamlandı" ilan edilemez.** Milestone 4.4, bu rejimde 886/886 test ile doğrulanmıştır; Milestone 5.0A (Analysis Orchestrator), 971/971 test ile doğrulanmıştır.
+**B. Gerçek Docker test rejimi** (nihai kabul kriteri): `PYTHONPATH=/app python -m pytest tests/ -v`, tam bağımlılık kurulu gerçek bir konteynerde çalıştırılır. **Hiçbir milestone, gerçek Docker ortamında `0 failed` sonucu görülmeden "tamamlandı" ilan edilemez.** Milestone 4.4, bu rejimde 886/886 test ile; Milestone 5.0A (Analysis Orchestrator), 971/971 test ile; Milestone 5.0B (Orchestration Persistence & Recovery Foundation) ise **998 passed, 0 failed, 0 skipped** ile doğrulanmıştır.
 
-**İki katmanlı entegrasyon testi ayrımı** (`tests/README.md`): API-sözleşme testleri SQLite üzerinde çalışır (hızlı, izole); gerçek entegrasyon testleri `TEST_DATABASE_URL`/`DATABASE_URL` ortam değişkeni ile gate'lenmiş gerçek PostgreSQL üzerinde çalışır ve ortam değişkeni yoksa `pytest.skip` ile zarifçe atlanır. Alembic migration referansları (`94c5e7403385`, `1f0e6d51f21b`) bu testlerin şema önkoşuludur.
+**İki katmanlı entegrasyon testi ayrımı** (`tests/README.md`): API-sözleşme testleri SQLite üzerinde çalışır (hızlı, izole); gerçek entegrasyon testleri `TEST_DATABASE_URL`/`DATABASE_URL` ortam değişkeni ile gate'lenmiş gerçek PostgreSQL üzerinde çalışır ve ortam değişkeni yoksa `pytest.skip` ile zarifçe atlanır. Milestone 5.0B'nin PostgreSQL testleri gerçek constraint/trigger davranışını, negatif resume binding ve owner-integrity senaryolarını, idempotency çatışmasını, cursor'ın ikinci sayfasını ve migration `upgrade → downgrade → upgrade` çevrimini gerçek SQL ile doğrular. Güncel Alembic head `4f9d2a6b8c10`'dur.
 
 **Sentetik fixture üretimi:** `tests/data/synthetic/generate_fixtures.py`, pandas + tek seferlik `soffice --headless` (LibreOffice) dönüştürmesiyle test mizan dosyaları üretir; LibreOffice bağımlılığı **proje bağımlılığı olarak eklenmemiştir** — yalnızca fixture üretimi için tek seferlik yerel bir araçtır.
 
@@ -620,7 +653,10 @@ Aşağıdaki işlemler, hiçbir engine/servis kodunda **kesinlikle yasaktır**. 
   Kod adı, yalnızca Bölüm 0.7'nin izin verdiği dahili bağlamlarda (dokümantasyon, milestone adları, git commit geçmişi, geliştirme iletişimi, geçici proje klasörü adı) var olabilir. Production-facing bir metinde ürün adı gerekiyorsa, bu değer yalnızca açık bir `brand`/`product_name` parametresi veya ileride eklenecek bir branding configuration katmanı üzerinden geçirilir (bkz. Bölüm 0.9). Bir marka değişikliği, hiçbir finansal engine'i, veri modelini, registry'yi, API sözleşmesini veya database şemasını etkilememeli, hiçbir migration gerektirmemelidir (bkz. Bölüm 0.6).
 - **Roll-up confidence/coverage yasak** — Bölüm 12'de tarif edildiği gibi, bir raporun/dashboard'un tek bir "genel güven skoru" hesaplanması yasaktır; her kaynağın kendi confidence/coverage'ı ayrı taşınır.
 - **Sessiz veri silme yasak** — bir section/widget/uyarı, kullanıcıya görünmeden "kaybolamaz"; her zaman ya gösterilir ya da açık bir nedenle "kullanılamaz" olarak işaretlenir.
-- **Kapsam dışı prod kodu yasak** (v1 kapsamında, ayrı milestone onayı olmadıkça) — yeni API endpoint'i, yeni DB tablosu/migration, gerçek PDF/DOCX/HTML render, frontend kodu, kimlik doğrulama/yetkilendirme mantığı, dashboard canlı yenileme/websocket/polling/cache katmanı.
+- **Duplicate payload owner yasak** — aynı canonical engine result payload'ı birden fazla tabloda tutulamaz; execution/history satırları yalnız Storage Ownership Matrix'in belirlediği tek owner'a FK ile bağlanır.
+- **Event sourcing yasak** — immutable terminal audit history, event stream değildir; orchestration event replay, CQRS read model veya ara-state event persistence ayrı bir açık milestone olmadan eklenemez.
+- **Saf Orchestrator'a persistence sızıntısı yasak** — `app/engines/analysis_orchestrator/**`, SQLAlchemy, ORM model, repository, artifact store veya başka bir persistence bileşeni import edemez.
+- **Kapsam dışı prod kodu yasak** (ayrı milestone onayı olmadıkça) — yeni API endpoint'i, queue/background worker, scheduler, batch runner, CLI/UI, gerçek PDF/DOCX/HTML render, kimlik doğrulama/yetkilendirme mantığı, dashboard canlı yenileme/websocket/polling/cache katmanı. Milestone 5.0B için onaylanmış orchestration model/migration/persistence foundation bu genel yasağın açık ve sınırlı istisnasıdır; caller adapter'ları hâlâ kapsam dışıdır.
 
 ---
 
@@ -628,7 +664,7 @@ Aşağıdaki işlemler, hiçbir engine/servis kodunda **kesinlikle yasaktır**. 
 
 ```
 backend/
-├── alembic/                          # DB migration'ları (yalnızca kalıcılık katmanı)
+├── alembic/                          # DB migration'ları (head: 4f9d2a6b8c10)
 ├── alembic.ini
 ├── requirements.txt                  # fastapi, sqlalchemy, alembic, psycopg,
 │                                      # pydantic-settings, pandas, openpyxl,
@@ -640,12 +676,21 @@ backend/
 │   ├── api/v1/                       # HTTP endpoint'leri (analyses, bulk_uploads,
 │   │                                  # companies, documents, periods, trial_balances)
 │   ├── models/                       # SQLAlchemy ORM modelleri
+│   │   └── orchestration_persistence.py  # 5.0B immutable run/execution/artifact/error modelleri
 │   ├── schemas/                      # Pydantic şemaları (API sözleşmesi)
 │   ├── services/                     # Kalıcılık-katmanı servisleri (bulk_upload,
 │   │                                  # trial_balance_upload)
 │   ├── core/config.py                # Uygulama konfigürasyonu
 │   ├── db/base.py, session.py        # DB bağlantı/oturum yönetimi
 │   ├── classification/               # Belge sınıflandırma pipeline'ı
+│   ├── orchestration_persistence/    # 5.0B application/persistence boundary
+│   │   ├── service.py                # Caller-neutral execute/resume/persist koordinasyonu
+│   │   ├── repository.py             # SQLAlchemy terminal transaction + history pagination
+│   │   ├── snapshot.py               # Fail-closed PreviousExecutionSnapshot builder
+│   │   ├── ownership.py              # Storage Ownership Matrix registry'si (3 financial + 7 artifact)
+│   │   ├── codec.py, artifacts.py    # Canonical JSON/SHA-256 ve payload tier seçimi
+│   │   ├── blob.py                   # Durable filesystem staging → READY adapter'ı
+│   │   └── ports.py, types.py        # Framework-neutral sınırlar ve immutable komut/projection'lar
 │   ├── trial_balance/                # Mizan ayrıştırma, normalize etme, hesap ağacı
 │   │   └── parsers/                  # Format-özel ayrıştırıcılar
 │   └── engines/
@@ -788,6 +833,11 @@ Bir milestone'un "üretime hazır" (%100 Production Readiness) ilan edilebilmesi
 - [ ] **API/DB/schema/protocol isimlerinin brand-independent olduğu doğrulandı** — yeni/değişen API endpoint yolları, database tablo/kolon adları, JSON schema alanları ve protocol/interface adlarının hiçbiri "FINOS" veya herhangi bir marka adına referans içermiyor (bkz. Bölüm 0.4, Bölüm 21).
 - [ ] **Marka değişikliğinin migration gerektirmediği doğrulandı** — bu milestone'un ürettiği hiçbir migration, registry kaydı veya API sözleşmesi, varsayımsal bir marka/ürün adı değişikliğiyle değişmek zorunda kalmaz (bkz. Bölüm 0.6).
 - [ ] **Kullanıcıya gösterilen marka adının config kaynaklı olduğu doğrulandı** — bu milestone'da kullanıcı-yüzü (rapor başlığı, dashboard metni, disclaimer, UI metni) bir ürün/marka adı içeriyorsa, bu değer sabit metin değil, açık bir `brand`/`product_name` parametresi veya branding configuration katmanından geliyor (bkz. Bölüm 0.9).
+- [ ] Persistence milestone'unda Storage Ownership Matrix tek owner sağlıyor; execution satırlarında duplicate payload yok.
+- [ ] `run_id` uniqueness ve aynı ID/farklı fingerprint fail-closed davranışı gerçek PostgreSQL üzerinde doğrulandı.
+- [ ] Resume scope, source execution, owner FK, canonical digest, engine/schema/model version ve input fingerprint bağları negatif testlerle doğrulandı.
+- [ ] Canonical immutable orchestration tablolarında gerçek PostgreSQL `UPDATE` ve `DELETE` işlemleri trigger tarafından reddediliyor.
+- [ ] Inline 256 KiB ve run başına 1 MiB bütçe tüm artifact yazma akışında uygulanıyor; external blob yalnız doğrulanmış READY locator ile bağlanıyor.
 - [ ] Commit/push YAPILMADI (yalnızca kullanıcı açıkça isterse yapılır).
 
 ---
@@ -844,7 +894,7 @@ feat(persistence): Company/FinancialPeriod/FinancialDocument altyapısı
 
 ## 27. Mimari Prensiplerin Kısa Özeti
 
-FINOS'un mimarisi, aşağıdaki on iki prensibe indirgenebilir:
+FINOS'un mimarisi, aşağıdaki on beş prensibe indirgenebilir:
 
 1. **Denetlenebilirlik önce gelir.** Her sayı, kaynağına kadar izlenebilir olmalıdır (provenance, source_engine_codes, section_source_mapping).
 2. **Determinizm mutlaktır.** Aynı girdi → aynı çıktı, her zaman. Sistem saati, rastgelelik, global durum bu garantiyi asla bozamaz.
@@ -858,9 +908,12 @@ FINOS'un mimarisi, aşağıdaki on iki prensibe indirgenebilir:
 10. **Hiçbir şey, kullanıcı onayı olmadan kalıcılaşmaz.** Ne bir mimari karar, ne bir commit, ne bir push — hepsi açık, yazılı onay bekler.
 11. **Kod adı, marka değildir; marka, koda gömülmez.** "FINOS" yalnızca dahili bir geliştirme kod adıdır (bkz. Bölüm 0); nihai ticari marka/ürün adı henüz belirlenmemiştir ve hiçbir production sembolüne, şemaya veya kullanıcı-yüzü metnine sabit olarak gömülemez — bir marka değişikliği, yalnızca gelecekteki bir konfigürasyon/branding katmanını etkilemeli, tek bir engine, registry, migration veya API sözleşmesini bile etkilememelidir.
 12. **Koordinasyon, hesaplama değildir; Orchestrator finansal değer üretmez.** Analysis Orchestrator (Milestone 5.0A), dokuz motoru doğru sırada ve doğru girdilerle çağırır, durumlarını gözlemler, tek bir run-seviyeli sonuç üretir — ama hiçbir finansal değer hesaplamaz, hiçbir motorun sonucunu değiştirmez veya yeniden hesaplamaz. "Neyin hesaplanacağı" motorların, "ne zaman ve hangi sırada çağrılacağı" yalnızca Orchestrator'ın sorumluluğudur; bu ikisi asla karışmaz.
+13. **Kalıcılık, saf Orchestrator'ın dışındadır.** SQLAlchemy, repository, snapshot ve artifact bileşenleri yalnız `app/orchestration_persistence/` sınırında yaşar; 5.0A public sözleşmeleri ve hesaplama/koordinasyon davranışı persistence için değiştirilmez.
+14. **Her payload'ın tek canonical sahibi vardır.** Financial result veya orchestration artifact owner'ı Storage Ownership Matrix ile belirlenir; execution history payload kopyalamaz, owner'a bağlanır. Immutable audit history event sourcing değildir.
+15. **Recovery fail-closed ve içerik-doğrulamalıdır.** Resume/reuse; scope, lineage, source execution, owner FK, digest ve sürüm/fingerprint bağlarının tamamı doğrulanmadan gerçekleşmez. Büyük payload yalnız doğrulanmış READY blob üzerinden terminal kayda bağlanır.
 
-Bu on iki prensip, bu kitabın geri kalan bölümlerinin özüdür. Yeni bir milestone tasarlanırken bir kural belirsizse, doğru cevap her zaman bu on iki prensibin en katı yorumudur.
+Bu on beş prensip, bu kitabın geri kalan bölümlerinin özüdür. Yeni bir milestone tasarlanırken bir kural belirsizse, doğru cevap her zaman bu on beş prensibin en katı yorumudur.
 
 ---
 
-*Bu doküman, FINOS mimarisinin Milestone 5.0A itibarıyla (971/971 Docker-doğrulanmış) durumunu yansıtır. Gelecekteki her milestone, bu kitaba uymalı; bu kitapla çelişen her tasarım kararı, ayrı bir onaylı revizyon turunda bu kitaba işlenmelidir.*
+*Bu doküman, FINOS mimarisinin Milestone 5.0B itibarıyla (998 passed, 0 failed, 0 skipped; Docker-doğrulanmış) durumunu yansıtır. Gelecekteki her milestone, bu kitaba uymalı; bu kitapla çelişen her tasarım kararı, ayrı bir onaylı revizyon turunda bu kitaba işlenmelidir.*

@@ -25,6 +25,14 @@ from app.models.financial_analysis_result import FinancialAnalysisResult
 from app.models.financial_analysis_result_source import FinancialAnalysisResultSource
 from app.models.financial_document import FinancialDocument
 from app.models.financial_period import FinancialPeriod
+from app.models.orchestration_persistence import (
+    OrchestrationArtifact,
+    OrchestrationArtifactLocation,
+    OrchestrationEngineExecution,
+    OrchestrationError,
+    OrchestrationPhysicalObject,
+    OrchestrationRun,
+)
 
 __all__ = [
     "Company",
@@ -46,4 +54,10 @@ __all__ = [
     "ItemReviewDecision",
     "SourceMode",
     "AnalysisSourceRole",
+    "OrchestrationRun",
+    "OrchestrationEngineExecution",
+    "OrchestrationArtifact",
+    "OrchestrationPhysicalObject",
+    "OrchestrationArtifactLocation",
+    "OrchestrationError",
 ]
