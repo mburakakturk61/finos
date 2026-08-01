@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | Doküman durumu | ONAYLANMIŞ — Resmi Referans |
-| Versiyon | 1.0.0 |
-| Kapsadığı sistem durumu | Milestone 1 → Milestone 4.4 (Docker doğrulanmış: 886/886 test) |
+| Versiyon | 1.1.0 |
+| Kapsadığı sistem durumu | Milestone 1 → Milestone 5.0A (Docker doğrulanmış: 971/971 test) |
 | Bu dokümanın rolü | Bundan sonra yazılacak **her** milestone'un bağlayıcı referans kaynağı |
 | Değiştirme yetkisi | Yalnızca açık kullanıcı onayı ile, ayrı bir revizyon turunda |
 | "FINOS" ifadesinin statüsü | **Yalnızca dahili geliştirme kod adıdır** — nihai ticari marka/ürün adı değildir (bkz. Bölüm 0) |
@@ -17,7 +17,7 @@
 
 Bu doküman, FINOS platformunun mimarisini anlatan tek resmi kaynaktır. Milestone tasarım dokümanları (`docs/FINOS_MILESTONE_*_DESIGN.md`), belirli bir motorun veya özelliğin ayrıntılı tasarımını taşır; bu kitap ise onların hepsinin uyduğu **üst düzey, kalıcı kuralları** taşır. Bir milestone tasarım dokümanı ile bu kitap çelişirse, bu kitap bağlayıcıdır — çelişki bir tasarım hatası olarak ele alınır ve çözülür.
 
-Bu kitap **icat edilmiş** bir mimari değildir. FINOS'un bugüne kadar inşa edilmiş, testleri gerçek bir Docker ortamında 886/886 yeşil dönen dokuz motorunun (engine) davranışını, kurallarını ve sözleşmelerini olduğu gibi kayda geçirir. Her madde, kod tabanında halihazırda uygulanmış bir gerçeği tarif eder; hiçbir madde henüz var olmayan bir davranışı vaat etmez.
+Bu kitap **icat edilmiş** bir mimari değildir. FINOS'un bugüne kadar inşa edilmiş, testleri gerçek bir Docker ortamında 971/971 yeşil dönen dokuz finansal engine'inin ve bunları koordine eden Analysis Orchestrator katmanının (Milestone 5.0A) davranışını, kurallarını ve sözleşmelerini olduğu gibi kayda geçirir. Her madde, kod tabanında halihazırda uygulanmış bir gerçeği tarif eder; hiçbir madde henüz var olmayan bir davranışı vaat etmez.
 
 Bu kitabı okuyan biri — insan veya gelecekteki bir implementasyon turu — şu soruların cevabını burada bulmalıdır: *Bir motor ne yapar, ne yapmaz? Yeni bir motor nasıl eklenir? Bir registry nasıl büyütülür? Hangi işlemler kesinlikle yasaktır? Bir milestone ne zaman "tamamlanmış" sayılır?*
 
@@ -180,6 +180,8 @@ FINOS backend'i, FastAPI tabanlı bir Python servisidir (`fastapi`, `uvicorn`, `
 
 `app/engines/common/**`, tüm engine'lerin paylaştığı tip tanımlarını (`*_types.py`) ve registry'leri (`*_registry.py`) barındıran ortak kütüphanedir. Hiçbir engine, başka bir engine'in `service.py` iç uygulamasını import etmez — yalnızca `common/` üzerinden paylaşılan sözleşmeleri (contracts) ve doğrudan yukarı akış (upstream) sonuç nesnelerini kullanır.
 
+**Koordinasyon alt-katmanı — Analysis Orchestrator (Milestone 5.0A):** Dokuz finansal engine'in ÜZERİNDE, kendisi **hiçbir finansal hesaplama yapmayan** bir koordinasyon alt-katmanı bulunur: `app/engines/analysis_orchestrator/`. Bu katman, dokuz motoru Bölüm 3'teki bağımlılık grafiğine göre doğru sırada, doğru girdilerle çağırır, her birinin durumunu gözlemler ve tek bir run-seviyeli sonuç (`OrchestrationRunResult`) üretir — hiçbir motorun sonucunu değiştirmez, hiçbir değeri yeniden hesaplamaz, hiçbir yeni finansal yargı üretmez. Bu ayrım, Bölüm 1'deki katmanlı sorumluluk ilkesinin doğrudan bir uzantısıdır: dokuz motor **NEYİN** hesaplanacağını, Orchestrator yalnızca **NE ZAMAN** ve **HANGİ SIRADA** çağrılacağını belirler. Orchestrator, motorları `ORCHESTRATOR_ENGINE_DISPATCH` adlı, import-zamanında doğrudan Python fonksiyon referanslarıyla doldurulan sabit bir eşlemeyle çağırır — hiçbir dinamik/string-tabanlı çözümleme kullanmaz (bkz. Bölüm 6, Bölüm 18-19).
+
 API katmanı ile engine katmanı arasındaki köprü, `app/engines/protocol.py`'de tanımlı `EngineSourceRef`/`EngineRunContext` sözleşme katmanıdır (Milestone 4.1+). Bu dosya, kalıcılık katmanının engine sonuçlarını nasıl referanslayacağını tanımlar; engine'lerin kendisi bu sözleşmeye bağımlı değildir — bağımlılık tek yönlüdür (API → engine, asla tersi değil).
 
 ---
@@ -218,7 +220,7 @@ Financial Statements (balance_sheet + income_statement)
 Kesin bağımlılık kuralları:
 
 - **Financial Statements**, hiçbir engine'e bağımlı değildir; yalnızca `app/trial_balance/**`'in ürettiği normalize edilmiş hesap verisini tüketir.
-- **Ratios**, yalnızca Financial Statements çıktısını (bilanço + gelir tablosu JSON sonucu) tüketir.
+- **Ratios**, Financial Statements çıktısını (bilanço + gelir tablosu JSON sonucu) tüketir — ama bu bağımlılık bir AND değil, bir **`any_of`**'tur: Balance Sheet VEYA Income Statement sonuçlarından EN AZ BİRİ üretildiyse Ratio çalışır (eksik olan tarafa `None` geçirilir); ikisi de üretilemediyse Ratio atlanır (bkz. aşağıdaki "Kod-seviyesinde zorunlu kılınma" notu).
 - **Benchmarks**, yalnızca Ratios çıktısını tüketir.
 - **Health Score**, Ratios ve Benchmarks çıktılarını tüketir.
 - **Credit Score**, Ratios, Benchmarks ve Health Score çıktılarını tüketir (Health Score'u referans alır, yeniden hesaplamaz — bkz. Bölüm 19).
@@ -228,6 +230,8 @@ Kesin bağımlılık kuralları:
 - **Render Contract**, yalnızca `ExecutiveReportResult` girdisini tüketir; hiçbir upstream engine'i doğrudan çağırmaz, yalnızca zaten üretilmiş bir raporun section sırasını ve render-nötr metadata'sını üretir.
 
 Bu graph **tek yönlüdür**: hiçbir engine, kendisine bağımlı olan bir engine'i geri çağıramaz veya onun sonucunu bekleyemez. Bir engine yalnızca kendisinden önceki (yukarı akıştaki) engine'lerin sonuçlarını parametre olarak alır.
+
+**Kod-seviyesinde zorunlu kılınma (Milestone 5.0A):** Yukarıdaki graf, `app/engines/analysis_orchestrator/registry.py`'deki `ENGINE_DEPENDENCY_REGISTRY` ile artık yalnızca kavramsal değil, kayıt-anında doğrulanan, çalışma zamanında zorunlu kılınan bir yapıdır. Bu registry'de Financial Statements tek bir birleşik düğüm değil, `FS_BALANCE_SHEET` / `FS_INCOME_STATEMENT` olarak İKİ ayrı motor koduna karşılık gelir; toplam **10 düğüm, 24 kenar** vardır — **21 kenar `all_of`** (klasik AND — bir motorun TÜM listelenen bağımlılıklarının tamamlanmış/dereceli olması gerekir), **2 kenar `any_of`** (Ratio'nun `FS_BALANCE_SHEET`/`FS_INCOME_STATEMENT` bağımlılığı — yukarıdaki OR kuralının kod karşılığı) ve **1 kenar `optional`** (Dashboard'un Benchmark'a bağımlılığı — Benchmark mevcutsa kullanılır, mevcut değilse Dashboard yine de çalışır; Health Score/Credit Score/Recommendation zaten Benchmark'a `all_of` ile bağlı olduğu için bu kenar pratikte dolaylı olarak zaten sağlanmış olur). Bu üç bağımlılık türü (`all_of`/`any_of`/`optional`), `DependencyRequirement` adlı deklaratif bir sözleşmeyle ifade edilir.
 
 ---
 
@@ -365,6 +369,9 @@ Her engine'in kanonik veri kümesi (oranlar, benchmark'lar, skor kuralları, ön
 - `RECOMMENDATION_RULES` (39 kayıt) — `app/engines/common/recommendation_types.py` / `recommendation_registry.py`
 - `REPORT_SECTION_REGISTRY` (18 kayıt), `REPORT_TYPE_REGISTRY` (7 kayıt) — `app/engines/common/report_registry.py`
 - `DASHBOARD_WIDGET_REGISTRY` (2 tip × 5 widget = 10 kayıt) — `app/engines/common/dashboard_registry.py`
+- `ENGINE_DEPENDENCY_REGISTRY` (10 düğüm, 24 kenar) — `app/engines/analysis_orchestrator/registry.py`
+
+**`ORCHESTRATOR_ENGINE_DISPATCH` bir registry DEĞİLDİR (kesin ayrım):** `app/engines/analysis_orchestrator/dispatch.py`'deki `ORCHESTRATOR_ENGINE_DISPATCH`, dokuz motorun gerçek, çağrılabilir fonksiyon referanslarını tutar — ama bu, yukarıdaki registry'lerin aksine hiçbir kayıt-doğrulama mantığı taşımaz; yalnızca **import-zamanında, doğrudan Python `import` ifadeleriyle bir kez doldurulan sabit bir eşlemedir.** `ENGINE_DEPENDENCY_REGISTRY` "hangi motor hangi motora bağımlı" (metadata) sorusuna, `ORCHESTRATOR_ENGINE_DISPATCH` ise "bu motoru gerçekte nasıl çağırırım" (executable) sorusuna cevap verir — bu ikisi KESİN OLARAK AYRI iki yapıdır (bkz. Bölüm 18-19, dinamik dispatch yasağı).
 
 **Kayıt anında doğrula (validate-at-registration) prensibi:** Her registry, bir kayıt eklendiği anda o kaydın tüm yapısal kurallarını doğrular (bağımlılık kodlarının var olduğu, döngü olmadığı, aynı domain'in iki "full" section'da olmadığı, vb.). Geçersiz bir kayıt, modül import edilirken (yani uygulama başlarken) hemen hata fırlatır — çalışma zamanında sessizce yutulan bir hata asla olmaz.
 
@@ -405,6 +412,11 @@ Her engine ve her paylaşımlı registry, kendi bağımsız versiyon sabitini ta
 | Dashboard | `DASHBOARD_SCHEMA_VERSION` / `DASHBOARD_MODEL_VERSION` | `1.0.0` / `1.0.0` |
 | Render Contract | `RENDER_CONTRACT_SCHEMA_VERSION` | `1.0.0` |
 | Financial Statements | `ENGINE_VERSION` (her motorda ayrı) | `1.0.0` |
+| Analysis Orchestrator (koordinasyon) | `ORCHESTRATION_SCHEMA_VERSION` / `ORCHESTRATION_MODEL_VERSION` | `2.0.0` / `2.0.0` |
+| Analysis Orchestrator (execution plan) | `EXECUTION_PLAN_VERSION` | `2.0.0` |
+| Analysis Orchestrator (input fingerprint) | `FINGERPRINT_SCHEMA_VERSION` | `1.0.0` |
+
+Analysis Orchestrator'ın kendi versiyon eksenleri, motorların KENDİ schema/model versiyonlarından AYRIDIR: `ORCHESTRATION_SCHEMA_VERSION`/`ORCHESTRATION_MODEL_VERSION`, `OrchestrationRunRequest`/`OrchestrationRunResult`'ın kendi alan yapısını ve davranış mantığını (ör. reuse kuralı, durum-eşleme tablosu) izler; `EXECUTION_PLAN_VERSION`, `ENGINE_DEPENDENCY_REGISTRY`'nin yapısını (yeni bir motor eklendiğinde artar) izler; `FINGERPRINT_SCHEMA_VERSION`, girdi parmak izi (input fingerprint) hesaplama algoritmasının kendisini izler.
 
 **Schema version** ile **model version** arasındaki ayrım kesindir:
 
@@ -464,6 +476,10 @@ Determinizmi bozan ve bu yüzden **kesinlikle yasak** olan üç kaynak:
 
 Her yeni servis dosyası için, kaynak kodun bu üç deseni içermediğini doğrulayan bir statik test yazılır (`inspect.getsource()` ile kaynağı okuyup `"datetime.now("`, `"uuid4()"`, `"random."` alt-dizelerinin yokluğunu doğrulamak) — bkz. `test_no_datetime_now_uuid4_random_in_dashboard_service_source` örneği. Bu desen, her yeni engine/servis dosyası için tekrarlanması gereken zorunlu bir test kalıbıdır.
 
+**İstisna — monotonic clock, yalnızca telemetry için (Milestone 5.0A):** Analysis Orchestrator, `run_orchestration(request, *, timing_probe=None)` imzasıyla, **yalnızca çağıranın açıkça enjekte ettiği** bir `TimingProbe` (`time.perf_counter()` gibi monotonic bir saat sarmalayıcısı) kabul edebilir. Bu, yukarıdaki `datetime.now()`/`uuid4()`/`random.*` yasağının kapsamına GİRMEZ, çünkü: (a) Orchestrator'ın kendisi hiçbir saat kütüphanesini kendi başına import edip çağırmaz — saat okuma sorumluluğu tamamen çağırana aittir; (b) `timing_probe`'un ürettiği `ExecutionTelemetry`, iş sonucunun (`OrchestrationRunResult`) bir PARÇASI DEĞİLDİR — ayrı, opsiyonel bir dönüş değeridir; (c) `timing_probe=None` iken hiçbir telemetry üretilmez, davranış tamamen belirlenimlidir. Takvim/duvar-saati okuma (`datetime.now()` ile "bugün ne" sorusuna cevap vermek) hâlâ kesinlikle yasaktır — istisna yalnızca, iş sonucunun dışında tutulan, dışarıdan enjekte edilen, monotonic bir gözlemlenebilirlik sinyaline özgüdür.
+
+**İki ayrı determinizm özelliği (Milestone 5.0A ile genelleştirilen terminoloji):** `BUSINESS_PAYLOAD_DETERMINISM`, aynı finansal girdiler + aynı seçeneklerle üretilen sonucun *iş içeriğinin* (finansal/hesaplama sonuçları) bit-bir aynı olmasını ifade eder — bu, çağıranın sağladığı `run_id`/`correlation_id`/`generated_at` gibi kimlik/zaman alanları farklı olsa bile geçerlidir (bu alanlar zaten iş içeriğinin parçası değildir, bkz. yukarıdaki `generated_at`/`report_id` kuralı). `FULL_RESULT_DETERMINISM`, buna ek olarak run_id/correlation_id/generated_at de dahil TÜM sonuç nesnesinin (telemetry hariç) bit-bir aynı olmasını ifade eder. Bu ayrım, "aynı girdi → aynı çıktı" temel kuralının (yukarısı) hangi alanları kapsadığını kesinleştirir ve gelecekteki her motor/koordinasyon katmanı için bağlayıcı bir terminolojidir.
+
 ---
 
 ## 12. Explainability Standartları
@@ -515,7 +531,7 @@ FINOS iki paralel test rejimi kullanır:
 
 **A. Sandbox test rejimi** (bu konuşma/implementasyon ortamında kullanılır): `sqlalchemy`/`fastapi`/`pydantic` paketleri PyPI proxy'den kurulamadığı için, `app.models` için `sys.modules`'e önceden kaydedilen bir stub namespace paketi tekniğiyle, `app/models/__init__.py`'nin eager ORM importlarını hiç çalıştırmadan yalnızca `app.engines.**` (SIFIR sqlalchemy bağımlılığı) testlerini gerçekten çalıştırmak mümkündür (`run_tests.py`). Bu rejim, hızlı geri bildirim döngüsü için kullanılır ama **nihai kabul kriteri değildir.**
 
-**B. Gerçek Docker test rejimi** (nihai kabul kriteri): `PYTHONPATH=/app python -m pytest tests/ -v`, tam bağımlılık kurulu gerçek bir konteynerde çalıştırılır. **Hiçbir milestone, gerçek Docker ortamında `0 failed` sonucu görülmeden "tamamlandı" ilan edilemez.** Milestone 4.4, bu rejimde 886/886 test ile doğrulanmıştır.
+**B. Gerçek Docker test rejimi** (nihai kabul kriteri): `PYTHONPATH=/app python -m pytest tests/ -v`, tam bağımlılık kurulu gerçek bir konteynerde çalıştırılır. **Hiçbir milestone, gerçek Docker ortamında `0 failed` sonucu görülmeden "tamamlandı" ilan edilemez.** Milestone 4.4, bu rejimde 886/886 test ile doğrulanmıştır; Milestone 5.0A (Analysis Orchestrator), 971/971 test ile doğrulanmıştır.
 
 **İki katmanlı entegrasyon testi ayrımı** (`tests/README.md`): API-sözleşme testleri SQLite üzerinde çalışır (hızlı, izole); gerçek entegrasyon testleri `TEST_DATABASE_URL`/`DATABASE_URL` ortam değişkeni ile gate'lenmiş gerçek PostgreSQL üzerinde çalışır ve ortam değişkeni yoksa `pytest.skip` ile zarifçe atlanır. Alembic migration referansları (`94c5e7403385`, `1f0e6d51f21b`) bu testlerin şema önkoşuludur.
 
@@ -523,13 +539,16 @@ FINOS iki paralel test rejimi kullanır:
 
 **Zorunlu test katmanları (her yeni engine/section/rapor tipi için):** type/registry unit testleri, orkestrasyon/pipeline testleri, coverage/confidence testleri, golden dataset testleri (gerçekçi uçtan uca senaryo), property-based testler (invariant'ların rastgele/parametrik girdilerle doğrulanması), performans smoke testleri (gevşek üst sınır, kesin sertifikasyon değil), registry cleanliness/regression testleri (registry boyutunun büyümediği, izole kaydın sızmadığı).
 
-**`tests/conftest.py` autouse fixture — `_snapshot_shared_engine_registries`:** Her test, çalışmadan önce tüm paylaşımlı registry'lerin bir anlık görüntüsünü (snapshot) alır ve test bittiğinde bu görüntüyü **LIFO (son eklenen ilk geri yüklenen) sırayla** geri yükler. Şu an 8 modülü, kesin import sırasıyla kapsar:
+**`tests/conftest.py` autouse fixture — `_snapshot_shared_engine_registries`:** Her test, çalışmadan önce tüm paylaşımlı registry'lerin bir anlık görüntüsünü (snapshot) alır ve test bittiğinde bu görüntüyü **LIFO (son eklenen ilk geri yüklenen) sırayla** geri yükler. Şu an 9 modülü, kesin import sırasıyla kapsar:
 
 ```
 ratio_formulas → benchmark_registry → benchmark_types →
 health_score_registry → credit_score_registry →
-recommendation_registry → report_registry → dashboard_registry
+recommendation_registry → report_registry → dashboard_registry →
+analysis_orchestrator.registry
 ```
+
+`analysis_orchestrator.registry` (Milestone 5.0A), diğerlerine bağımlı değildir (yalnızca `analysis_orchestrator.types`'a bağımlıdır) — ama tutarlılık için EN SON eklenir, LIFO restore'da EN ÖNCE geri yüklenir.
 
 Bu fixture, bir testin (kasıtlı veya kazara) bir registry'ye kalıcı kayıt eklemesi durumunda, sonraki testlerin bu kirlenmeden etkilenmemesini garanti eden **son savunma hattıdır** (defense-in-depth) — her testin kendi `try`/`finally` temizliğine ek olarak, sistemsel bir güvenlik ağı sağlar.
 
@@ -661,13 +680,22 @@ backend/
 │       ├── dashboards/
 │       │   ├── __init__.py
 │       │   └── service.py
-│       └── render_contract/
+│       ├── render_contract/
+│       │   ├── __init__.py
+│       │   └── service.py
+│       └── analysis_orchestrator/    # Milestone 5.0A — koordinasyon katmanı (motor DEĞİL)
 │           ├── __init__.py
-│           └── service.py
+│           ├── types.py              # EngineCode, RunStatus, DependencyRequirement, vb.
+│           ├── registry.py           # ENGINE_DEPENDENCY_REGISTRY (10 düğüm, 24 kenar)
+│           ├── dispatch.py           # ORCHESTRATOR_ENGINE_DISPATCH (registry DEĞİL)
+│           ├── execution_plan.py     # DAG'dan deterministik topological sort
+│           ├── fingerprint.py        # SHA-256 canonical-JSON input fingerprint
+│           └── service.py            # run_orchestration()
 └── tests/
     ├── README.md                     # İki katmanlı test stratejisi (SQLite/Postgres)
     ├── conftest.py                   # Autouse registry snapshot/restore fixture
     ├── data/synthetic/generate_fixtures.py
+    ├── _orch_fakes.py                 # Orchestrator testleri için paylaşımlı sahte motor fabrikaları
     └── test_<engine>_<aspect>_unit.py    # Her engine için ayrı test dosyaları
 ```
 
@@ -816,7 +844,7 @@ feat(persistence): Company/FinancialPeriod/FinancialDocument altyapısı
 
 ## 27. Mimari Prensiplerin Kısa Özeti
 
-FINOS'un mimarisi, aşağıdaki on prensibe indirgenebilir:
+FINOS'un mimarisi, aşağıdaki on iki prensibe indirgenebilir:
 
 1. **Denetlenebilirlik önce gelir.** Her sayı, kaynağına kadar izlenebilir olmalıdır (provenance, source_engine_codes, section_source_mapping).
 2. **Determinizm mutlaktır.** Aynı girdi → aynı çıktı, her zaman. Sistem saati, rastgelelik, global durum bu garantiyi asla bozamaz.
@@ -829,9 +857,10 @@ FINOS'un mimarisi, aşağıdaki on prensibe indirgenebilir:
 9. **Kapsam disiplini, her milestone'un sınırıdır.** Onaylanmayan hiçbir şey (API, persistence, gerçek render, frontend, auth, AI) o milestone'un kodunda yer almaz.
 10. **Hiçbir şey, kullanıcı onayı olmadan kalıcılaşmaz.** Ne bir mimari karar, ne bir commit, ne bir push — hepsi açık, yazılı onay bekler.
 11. **Kod adı, marka değildir; marka, koda gömülmez.** "FINOS" yalnızca dahili bir geliştirme kod adıdır (bkz. Bölüm 0); nihai ticari marka/ürün adı henüz belirlenmemiştir ve hiçbir production sembolüne, şemaya veya kullanıcı-yüzü metnine sabit olarak gömülemez — bir marka değişikliği, yalnızca gelecekteki bir konfigürasyon/branding katmanını etkilemeli, tek bir engine, registry, migration veya API sözleşmesini bile etkilememelidir.
+12. **Koordinasyon, hesaplama değildir; Orchestrator finansal değer üretmez.** Analysis Orchestrator (Milestone 5.0A), dokuz motoru doğru sırada ve doğru girdilerle çağırır, durumlarını gözlemler, tek bir run-seviyeli sonuç üretir — ama hiçbir finansal değer hesaplamaz, hiçbir motorun sonucunu değiştirmez veya yeniden hesaplamaz. "Neyin hesaplanacağı" motorların, "ne zaman ve hangi sırada çağrılacağı" yalnızca Orchestrator'ın sorumluluğudur; bu ikisi asla karışmaz.
 
-Bu on bir prensip, bu kitabın geri kalan bölümlerinin özüdür. Yeni bir milestone tasarlanırken bir kural belirsizse, doğru cevap her zaman bu on bir prensibin en katı yorumudur.
+Bu on iki prensip, bu kitabın geri kalan bölümlerinin özüdür. Yeni bir milestone tasarlanırken bir kural belirsizse, doğru cevap her zaman bu on iki prensibin en katı yorumudur.
 
 ---
 
-*Bu doküman, FINOS mimarisinin Milestone 4.4 itibarıyla (886/886 Docker-doğrulanmış) durumunu yansıtır. Gelecekteki her milestone, bu kitaba uymalı; bu kitapla çelişen her tasarım kararı, ayrı bir onaylı revizyon turunda bu kitaba işlenmelidir.*
+*Bu doküman, FINOS mimarisinin Milestone 5.0A itibarıyla (971/971 Docker-doğrulanmış) durumunu yansıtır. Gelecekteki her milestone, bu kitaba uymalı; bu kitapla çelişen her tasarım kararı, ayrı bir onaylı revizyon turunda bu kitaba işlenmelidir.*
