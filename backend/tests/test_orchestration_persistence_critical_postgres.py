@@ -205,10 +205,13 @@ def test_financial_snapshot_preserves_5_0a_semantics_and_detects_owner_corruptio
     restored = loaded.snapshot.engine_snapshots[0].result_ref
     assert restored == outcome
     owner.result_json = {"tampered": True}
-    session.commit()
-    with pytest.raises(OrchestrationPersistenceError) as caught:
-        builder.build_previous_execution_snapshot(source_run.run_id, scope)
-    assert caught.value.category is PersistenceErrorCategory.ARTIFACT_INTEGRITY_FAILURE
+    with pytest.raises(DBAPIError):
+        session.commit()
+    session.rollback()
+    restored_after_rejected_corruption = builder.build_previous_execution_snapshot(
+        source_run.run_id, scope
+    ).snapshot.engine_snapshots[0].result_ref
+    assert restored_after_rejected_corruption == outcome
     session.close()
 
 

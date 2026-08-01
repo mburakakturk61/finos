@@ -32,6 +32,10 @@ class AnalysisRunScopeClaim(Base):
             "ix_analysis_run_scope_claims_scope_status",
             "company_id", "financial_period_id", "tenant_id", "status", "persisted_run_id",
         ),
+        Index(
+            "ix_analysis_run_scope_claims_subject_scope",
+            "initiating_subject_id", "tenant_id", "company_id", "financial_period_id",
+        ),
         CheckConstraint("operation_kind IN ('START','RESUME','RETRY')", name="operation_kind"),
         CheckConstraint("original_operation IN ('START','RESUME')", name="original_operation"),
         CheckConstraint("status IN ('CLAIMED','FINALIZED')", name="status"),
@@ -65,6 +69,7 @@ class AnalysisRunScopeClaim(Base):
     company_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     financial_period_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     tenant_id: Mapped[str | None] = mapped_column(String(255))
+    initiating_subject_id: Mapped[str | None] = mapped_column(String(255))
     operation_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     original_operation: Mapped[str] = mapped_column(String(16), nullable=False)
     previous_run_id: Mapped[str | None] = mapped_column(String(255))

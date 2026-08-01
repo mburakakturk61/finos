@@ -129,6 +129,7 @@ from app.models.enums import (
 )
 from app.models.financial_analysis_result import FinancialAnalysisResult
 from app.models.financial_analysis_result_source import FinancialAnalysisResultSource
+from app.orchestration_persistence.codec import canonical_json_bytes
 from app.models.financial_document import FinancialDocument
 from app.models.financial_period import FinancialPeriod
 
@@ -1589,6 +1590,9 @@ def _write_confirmed_records(
                     started_at=now,
                     completed_at=now,
                     result_json=engine_result.result_json,
+                    canonical_result_digest=hashlib.sha256(
+                        canonical_json_bytes(engine_result.result_json)
+                    ).hexdigest(),
                 )
                 db.add(analysis)
                 db.flush()

@@ -34,6 +34,7 @@ from app.models.enums import AnalysisStatus, AnalysisType, DocumentType, Process
 from app.models.financial_analysis_result import FinancialAnalysisResult
 from app.models.financial_document import FinancialDocument
 from app.models.financial_period import FinancialPeriod
+from app.orchestration_persistence.codec import canonical_json_bytes
 from app.trial_balance.service import analyze_trial_balance
 
 
@@ -262,6 +263,9 @@ def handle_trial_balance_upload(
         analysis.status = AnalysisStatus.COMPLETED
         analysis.completed_at = completed_at
         analysis.result_json = result
+        analysis.canonical_result_digest = hashlib.sha256(
+            canonical_json_bytes(result)
+        ).hexdigest()
         db.commit()
     except Exception:
         db.rollback()

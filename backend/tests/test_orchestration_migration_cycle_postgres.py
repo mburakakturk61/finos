@@ -29,7 +29,7 @@ def test_migration_upgrade_downgrade_upgrade_on_isolated_postgres_database():
         command.upgrade(config, "head")
         isolated_engine = create_engine(isolated_url)
         with isolated_engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "5c1a7e9d3b20"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "8b6e4d2c1a90"
         isolated_engine.dispose()
     finally:
         os.environ["DATABASE_URL"] = original_url

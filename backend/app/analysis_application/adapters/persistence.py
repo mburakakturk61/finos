@@ -141,6 +141,10 @@ class SqlAlchemyRunPersistenceAdapter:
                 engine_version=record.engine_model_version_used,
                 status=status,
                 result_json=normalized_payload,
+                canonical_result_digest=(
+                    hashlib.sha256(canonical_json_bytes(normalized_payload)).hexdigest()
+                    if normalized_payload is not None else None
+                ),
                 error_message=error_message,
                 started_at=audit_times.started_at,
                 completed_at=audit_times.completed_at,

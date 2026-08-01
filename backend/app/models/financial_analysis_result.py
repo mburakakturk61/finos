@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    event,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -21,6 +22,13 @@ from app.models.enums import AnalysisStatus, AnalysisType, SourceMode
 
 if TYPE_CHECKING:
     from app.models.financial_document import FinancialDocument
+
+
+def _sha256_check(column: str) -> str:
+    remainder = column
+    for character in "0123456789abcdef":
+        remainder = f"replace({remainder}, '{character}', '')"
+    return f"length({column}) = 64 AND length({remainder}) = 0"
 
 
 class FinancialAnalysisResult(Base):
@@ -92,6 +100,11 @@ class FinancialAnalysisResult(Base):
         CheckConstraint(
             "(source_mode <> 'direct_document') OR (document_id IS NOT NULL)",
             name="ck_financial_analysis_results_direct_requires_document",
+        ),
+        CheckConstraint(
+            "(canonical_result_digest IS NULL OR (" + _sha256_check("canonical_result_digest") + ")) AND "
+            "(status <> 'completed' OR result_json IS NULL OR canonical_result_digest IS NOT NULL)",
+            name="ck_financial_analysis_results_canonical_digest",
         ),
     )
 
@@ -170,6 +183,7 @@ class FinancialAnalysisResult(Base):
         JSON().with_variant(JSONB(), "postgresql"),
         nullable=True,
     )
+    canonical_result_digest: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(String(2000))
 
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -187,3 +201,17 @@ class FinancialAnalysisResult(Base):
         back_populates="analysis_results",
         foreign_keys=[document_id],
     )
+
+
+@event.listens_for(FinancialAnalysisResult, "before_insert")
+@event.listens_for(FinancialAnalysisResult, "before_update")
+def _set_canonical_result_digest(_mapper, _connection, target: FinancialAnalysisResult) -> None:
+    """Keep ORM writers compatible while the database remains authoritative."""
+    if target.status is AnalysisStatus.COMPLETED and target.result_json is not None:
+        import hashlib
+
+        from app.orchestration_persistence.codec import canonical_json_bytes
+
+        target.canonical_result_digest = hashlib.sha256(
+            canonical_json_bytes(target.result_json)
+        ).hexdigest()

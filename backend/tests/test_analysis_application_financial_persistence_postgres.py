@@ -6,6 +6,7 @@ import time
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import DBAPIError
 
 from app.analysis_application.adapters.persistence import SqlAlchemyRunPersistenceAdapter
 from app.analysis_application.adapters.read import ApplicationReadIntegrityError, SqlAlchemyAnalysisReadAdapter
@@ -182,9 +183,9 @@ def test_canonical_read_projects_financial_owner_semantics_and_verifies_digest_p
         assert ratio.payload.provenance_source_references[1].startswith("supporting_analysis:")
         owner = session.get(FinancialAnalysisResult, result.executions[0].payload.payload_reference.financial_analysis_result_id)
         owner.result_json = {"tampered": True}
-        session.commit()
-        with pytest.raises(ApplicationReadIntegrityError):
-            adapter.get_result(run_id, scope, include_payloads=True)
+        with pytest.raises(DBAPIError):
+            session.commit()
+        session.rollback()
 
 
 def test_wrong_tenant_projection_is_fail_closed_postgres(tmp_path):

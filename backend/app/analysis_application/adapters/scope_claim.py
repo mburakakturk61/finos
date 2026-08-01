@@ -34,8 +34,14 @@ class ScopeClaimError(RuntimeError):
 class SqlAlchemyRunScopeClaimRepository:
     """Each method owns one short transaction; the claim is not job state."""
 
-    def __init__(self, session_factory: Callable[[], Session]) -> None:
+    def __init__(
+        self,
+        session_factory: Callable[[], Session],
+        *,
+        initiating_subject_id: str = "application-core",
+    ) -> None:
         self._session_factory = session_factory
+        self._initiating_subject_id = initiating_subject_id
 
     def claim(
         self, run_id: str, scope: ApplicationScopeDTO,
@@ -44,7 +50,8 @@ class SqlAlchemyRunScopeClaimRepository:
         values = {
             "claim_id": uuid.uuid4(), "run_id": run_id,
             "company_id": scope.company_id, "financial_period_id": scope.financial_period_id,
-            "tenant_id": scope.tenant_id, "operation_kind": scope.operation_kind.value,
+            "tenant_id": scope.tenant_id, "initiating_subject_id": self._initiating_subject_id,
+            "operation_kind": scope.operation_kind.value,
             "original_operation": scope.original_operation.value,
             "previous_run_id": scope.previous_run_id,
             "application_command_digest": application_command_digest,
@@ -64,6 +71,8 @@ class SqlAlchemyRunScopeClaimRepository:
                 )
                 if row is None:
                     raise ScopeClaimError(ScopeClaimFailure.UNAVAILABLE)
+                if row.initiating_subject_id != self._initiating_subject_id:
+                    raise ScopeClaimError(ScopeClaimFailure.CONFLICT)
                 result = _to_contract(row)
                 if not _matches(result, scope) or result.application_command_digest != application_command_digest:
                     raise ScopeClaimError(ScopeClaimFailure.CONFLICT)
@@ -79,7 +88,10 @@ class SqlAlchemyRunScopeClaimRepository:
     ) -> RunScopeClaim:
         try:
             with self._session_factory() as session, session.begin():
-                row = session.scalar(select(AnalysisRunScopeClaim).where(AnalysisRunScopeClaim.run_id == run_id))
+                row = session.scalar(select(AnalysisRunScopeClaim).where(
+                    AnalysisRunScopeClaim.run_id == run_id,
+                    AnalysisRunScopeClaim.initiating_subject_id.is_not_distinct_from(self._initiating_subject_id),
+                ))
                 result = _to_contract(row) if row else None
                 if result is None or not _matches(result, scope) or result.claim_token != claim_token or result.version != expected_version:
                     raise ScopeClaimError(ScopeClaimFailure.MISMATCH)
@@ -106,6 +118,7 @@ class SqlAlchemyRunScopeClaimRepository:
                         AnalysisRunScopeClaim.company_id == scope.company_id,
                         AnalysisRunScopeClaim.financial_period_id == scope.financial_period_id,
                         AnalysisRunScopeClaim.tenant_id.is_not_distinct_from(scope.tenant_id),
+                        AnalysisRunScopeClaim.initiating_subject_id.is_not_distinct_from(self._initiating_subject_id),
                         AnalysisRunScopeClaim.operation_kind == scope.operation_kind.value,
                         AnalysisRunScopeClaim.original_operation == scope.original_operation.value,
                         AnalysisRunScopeClaim.previous_run_id.is_not_distinct_from(scope.previous_run_id),
@@ -123,7 +136,10 @@ class SqlAlchemyRunScopeClaimRepository:
                     )
                 )
                 row_count = session.execute(statement).rowcount
-                row = session.scalar(select(AnalysisRunScopeClaim).where(AnalysisRunScopeClaim.run_id == run_id))
+                row = session.scalar(select(AnalysisRunScopeClaim).where(
+                    AnalysisRunScopeClaim.run_id == run_id,
+                    AnalysisRunScopeClaim.initiating_subject_id.is_not_distinct_from(self._initiating_subject_id),
+                ))
                 result = _to_contract(row) if row else None
                 expected_tuple = (
                     persisted_run.id, persisted_run.request_fingerprint,

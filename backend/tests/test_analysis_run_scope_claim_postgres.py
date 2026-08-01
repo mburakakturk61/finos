@@ -5,7 +5,7 @@ import uuid
 import time
 
 import pytest
-from sqlalchemy import delete, update
+from sqlalchemy import delete, insert, update
 from sqlalchemy.exc import DBAPIError
 
 from app.analysis_application.contracts import (
@@ -97,6 +97,31 @@ def test_cross_tenant_same_run_claim_race_has_exactly_one_winner_postgres():
     assert sum(isinstance(item, ScopeClaimError) and item.failure is ScopeClaimFailure.CONFLICT for item in outcomes) == 1
 
 
+def test_same_scope_different_subject_replay_is_fail_closed_postgres():
+    scope = _scope("tenant-subject")
+    first = SqlAlchemyRunScopeClaimRepository(SessionLocal, initiating_subject_id="subject-a")
+    second = SqlAlchemyRunScopeClaimRepository(SessionLocal, initiating_subject_id="subject-b")
+    run_id = "subject-" + uuid.uuid4().hex
+    first.claim(run_id, scope, "a" * 64, datetime.now(timezone.utc))
+    with pytest.raises(ScopeClaimError) as caught:
+        second.claim(run_id, scope, "a" * 64, datetime.now(timezone.utc))
+    assert caught.value.failure is ScopeClaimFailure.CONFLICT
+
+
+def test_new_scope_claim_without_subject_is_rejected_by_postgres():
+    scope = _scope("tenant-no-subject")
+    with SessionLocal() as session, pytest.raises(DBAPIError):
+        session.execute(insert(AnalysisRunScopeClaim).values(
+            claim_id=uuid.uuid4(), run_id="missing-subject-" + uuid.uuid4().hex,
+            company_id=scope.company_id, financial_period_id=scope.financial_period_id,
+            tenant_id=scope.tenant_id, initiating_subject_id=None,
+            operation_kind="START", original_operation="START", previous_run_id=None,
+            application_command_digest="a" * 64, status="CLAIMED", version=1,
+            claim_token="b" * 64, claimed_at=datetime.now(timezone.utc),
+        ))
+        session.commit()
+
+
 def test_finalize_is_cas_idempotent_and_wrong_tenant_is_fail_closed_postgres():
     repository = SqlAlchemyRunScopeClaimRepository(SessionLocal)
     scope = _scope("tenant-a")
@@ -119,6 +144,7 @@ def test_scope_claim_rejects_real_update_and_delete_postgres():
     claim = repository.claim("immutable-" + uuid.uuid4().hex, scope, "a" * 64, datetime.now(timezone.utc))
     for statement in (
         update(AnalysisRunScopeClaim).where(AnalysisRunScopeClaim.claim_id == claim.claim_id).values(tenant_id="attacker"),
+        update(AnalysisRunScopeClaim).where(AnalysisRunScopeClaim.claim_id == claim.claim_id).values(initiating_subject_id="attacker"),
         delete(AnalysisRunScopeClaim).where(AnalysisRunScopeClaim.claim_id == claim.claim_id),
     ):
         with SessionLocal() as session:

@@ -242,7 +242,12 @@ class SqlAlchemyOrchestrationRepository:
             company_id=command.scope.company_id, period_id=command.scope.period_id,
             document_id=create.document_id, source_mode=create.source_mode,
             analysis_type=create.analysis_type, engine_version=create.engine_version,
-            status=owner_status, result_json=payload, error_message=error_message,
+            status=owner_status, result_json=payload,
+            canonical_result_digest=(
+                hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+                if payload is not None else None
+            ),
+            error_message=error_message,
             started_at=create.started_at, completed_at=create.completed_at,
         )
         self.session.add(owner)
