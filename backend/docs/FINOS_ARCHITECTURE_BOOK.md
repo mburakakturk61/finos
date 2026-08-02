@@ -1,12 +1,12 @@
-# FINOS Architecture Book v1.4.0
+# FINOS Architecture Book v1.5.0
 
 **FINOS Constitution — Tek Resmi Mimari Referans**
 
 | | |
 |---|---|
 | Doküman durumu | ONAYLANMIŞ — Resmi Referans |
-| Versiyon | 1.4.0 |
-| Kapsadığı sistem durumu | Milestone 1 → Milestone 5.0D (Docker doğrulanmış: 1066 passed, 0 failed, 0 skipped) |
+| Versiyon | 1.5.0 |
+| Kapsadığı sistem durumu | Milestone 1 → Milestone 5.0E (Docker doğrulanmış: 1716 passed, 0 failed, 0 skipped) |
 | Bu dokümanın rolü | Bundan sonra yazılacak **her** milestone'un bağlayıcı referans kaynağı |
 | Değiştirme yetkisi | Yalnızca açık kullanıcı onayı ile, ayrı bir revizyon turunda |
 | "FINOS" ifadesinin statüsü | **Yalnızca dahili geliştirme kod adıdır** — nihai ticari marka/ürün adı değildir (bkz. Bölüm 0) |
@@ -17,7 +17,7 @@
 
 Bu doküman, FINOS platformunun mimarisini anlatan tek resmi kaynaktır. Milestone tasarım dokümanları (`docs/FINOS_MILESTONE_*_DESIGN.md`), belirli bir motorun veya özelliğin ayrıntılı tasarımını taşır; bu kitap ise onların hepsinin uyduğu **üst düzey, kalıcı kuralları** taşır. Bir milestone tasarım dokümanı ile bu kitap çelişirse, bu kitap bağlayıcıdır — çelişki bir tasarım hatası olarak ele alınır ve çözülür.
 
-Bu kitap **icat edilmiş** bir mimari değildir. FINOS'un bugüne kadar inşa edilmiş, testleri gerçek bir Docker ortamında 1066 passed, 0 failed, 0 skipped sonucu veren dokuz finansal engine'inin, bunları koordine eden saf Analysis Orchestrator katmanının (Milestone 5.0A), Orchestration Persistence & Recovery Foundation katmanının (Milestone 5.0B), framework-bağımsız Analysis Application Layer'ın (Milestone 5.0C) ve bu use-case'leri güvenli, versioned HTTP sözleşmeleriyle dış dünyaya açan API & Integration Layer'ın (Milestone 5.0D) davranışını, kurallarını ve sözleşmelerini olduğu gibi kayda geçirir. Her madde, kod tabanında halihazırda uygulanmış bir gerçeği tarif eder; hiçbir madde henüz var olmayan bir davranışı vaat etmez.
+Bu kitap **icat edilmiş** bir mimari değildir. FINOS'un bugüne kadar inşa edilmiş, testleri gerçek bir Docker ortamında 1716 passed, 0 failed, 0 skipped sonucu veren dokuz finansal engine'inin, bunları koordine eden saf Analysis Orchestrator katmanının (Milestone 5.0A), Orchestration Persistence & Recovery Foundation katmanının (Milestone 5.0B), framework-bağımsız Analysis Application Layer'ın (Milestone 5.0C), versioned API & Integration Layer'ın (Milestone 5.0D) ve bunun production kimlik/güvenlik sınırını uygulayan Authentication & Authorization katmanının (Milestone 5.0E) davranışını, kurallarını ve sözleşmelerini olduğu gibi kayda geçirir. Her madde, kod tabanında halihazırda uygulanmış bir gerçeği tarif eder; hiçbir madde henüz var olmayan bir davranışı vaat etmez.
 
 Bu kitabı okuyan biri — insan veya gelecekteki bir implementasyon turu — şu soruların cevabını burada bulmalıdır: *Bir motor ne yapar, ne yapmaz? Yeni bir motor nasıl eklenir? Bir registry nasıl büyütülür? Hangi işlemler kesinlikle yasaktır? Bir milestone ne zaman "tamamlanmış" sayılır?*
 
@@ -128,21 +128,24 @@ Bu kitap, bu dört önceliği somut, denetlenebilir kurallara dönüştürür.
 
 ## 2. Genel Sistem Mimarisi
 
-FINOS backend'i, FastAPI tabanlı bir Python servisidir (`fastapi`, `uvicorn`, `sqlalchemy`, `alembic`, `psycopg`, `pydantic-settings`, `pytest` — bkz. `requirements.txt`). Analysis Platform, dört temel mimari bölgeye ayrılır:
+FINOS backend'i, FastAPI tabanlı bir Python servisidir (`fastapi`, `uvicorn`, `sqlalchemy`, `alembic`, `psycopg`, `pydantic-settings`, `pytest` — bkz. `requirements.txt`). Analysis Platform, beş temel mimari bölgeye ayrılır:
 
 **A. API & Integration Layer** (`app/api/v1/analysis_runs.py`, `app/schemas/analysis_runs_v1.py`, `app/integrations/analysis_http/**`) — versioned HTTP boundary, trusted authentication context tüketimi, request/response mapping, authoritative input resolution, local admission control ve production composition doğrulamasını sahiplenir. FastAPI/Pydantic bu dış sınırda kalır; router engine veya persistence repository'sini doğrudan çağırmaz.
 
-**B. Kalıcılık ve mevcut servisler** (`app/models`, `app/services`, `app/db`, `app/core`, `app/classification`, `app/trial_balance`, `app/orchestration_persistence`) — mizan yükleme, belge sınıflandırma, şirket/dönem/belge kalıcılığı, bulk-upload ve terminal orchestration persistence gibi veritabanı-bağımlı işlevleri barındırır. SQLAlchemy ORM modelleri (`app/models/*.py`) ve Alembic migration'ları (`alembic/`) burada yaşar.
+**B. Authentication & Authorization Layer** (`app/security/**`, `app/integrations/analysis_http/router_security.py`, `legacy_security.py`) — provider-neutral JWT/JWKS doğrulaması, authoritative tenant/principal/membership çözümlemesi, permission registry ve policy evaluation, request-bound security context, 5.0C `AuthorizationPort` adapter'ı, route protection, audit teslimi ve redaction sınırını sahiplenir. Authentication kimliği kanıtlar; authorization erişim kararını ayrı verir. Her iki sınır da outage, revoke ve integrity failure durumunda fail-closed'dur.
 
-**C. Analysis Application Layer** (`app/analysis_application/**`) — API/integration caller sözleşmeleri ile saf Orchestrator ve persistence portları arasındaki framework-bağımsız, senkron use-case koordinasyon bölgesidir. Core sözleşme ve servisleri FastAPI, Pydantic ve SQLAlchemy'den bağımsızdır; framework/persistence ayrıntıları yalnız adapter sınırında bulunur.
+**C. Kalıcılık ve mevcut servisler** (`app/models`, `app/services`, `app/db`, `app/core`, `app/classification`, `app/trial_balance`, `app/orchestration_persistence`) — mizan yükleme, belge sınıflandırma, şirket/dönem/belge kalıcılığı, bulk-upload ve terminal orchestration persistence gibi veritabanı-bağımlı işlevleri barındırır. SQLAlchemy ORM modelleri (`app/models/*.py`) ve Alembic migration'ları (`alembic/`) burada yaşar.
 
-**D. Engine katmanı** (`app/engines/**`) — SIFIR SQLAlchemy bağımlılığı olan, saf, deterministik, read-only hesaplama motorlarının bulunduğu katman. Bu katman, girdi olarak yalnızca sade Python veri yapıları (dict/dataclass) alır, çıktı olarak yalnızca sade Python veri yapıları (frozen dataclass) üretir. Hiçbir engine modülü veritabanına bağlanmaz, HTTP çağrısı yapmaz, dosya sistemine yazmaz.
+**D. Analysis Application Layer** (`app/analysis_application/**`) — API/integration caller sözleşmeleri ile saf Orchestrator ve persistence portları arasındaki framework-bağımsız, senkron use-case koordinasyon bölgesidir. Core sözleşme ve servisleri FastAPI, Pydantic ve SQLAlchemy'den bağımsızdır; framework/persistence ayrıntıları yalnız adapter sınırında bulunur.
+
+**E. Engine katmanı** (`app/engines/**`) — SIFIR SQLAlchemy bağımlılığı olan, saf, deterministik, read-only hesaplama motorlarının bulunduğu katman. Bu katman, girdi olarak yalnızca sade Python veri yapıları (dict/dataclass) alır, çıktı olarak yalnızca sade Python veri yapıları (frozen dataclass) üretir. Hiçbir engine modülü veritabanına bağlanmaz, HTTP çağrısı yapmaz, dosya sistemine yazmaz.
 
 Analysis request bağımlılık yönü tek yönlüdür:
 
 ```text
 HTTP request
     → API & Integration Layer (FastAPI/Pydantic boundary)
+    → Authentication & Authorization (request-bound, fail-closed)
     → Analysis Application Layer (framework-independent use case)
     → Analysis Orchestrator (saf koordinasyon)
     → Financial engines (saf hesaplama)
@@ -206,7 +209,7 @@ Bu foundation'ın sınırları şöyledir:
 - **Snapshot Builder:** yalnız persistence kayıtlarından ve doğrulanmış owner payload'larından 5.0A `PreviousExecutionSnapshot`/`PreviousEngineSnapshot` nesnelerini materialize eder.
 - **Artifact Store / Blob Store sınırı:** deterministic canonical JSON codec, SHA-256 bütünlük kontrolü ve inline/external tier seçimini sahiplenir. `BlobStorePort` provider-neutral'dır; mevcut reference adapter durable filesystem kullanır.
 
-**Persistence modelleri ve tablo sahipliği:** `orchestration_runs` run identity, request fingerprint, terminal status/versions ve terminal content digest'in; `orchestration_engine_executions` sıralı motor execution metadata'sı, input fingerprint, owner FK ve reuse lineage'ın; `orchestration_errors` structured error history'sinin; `orchestration_artifacts` finansal olmayan canonical payload ve digest'in; `orchestration_physical_objects` external blob metadata'sının sahibidir. `orchestration_artifact_locations`, canonical artifact/object satırlarını değiştirmeden fiziksel konum indirection'ı için ayrılmış mutable pointer tablosudur. Milestone 5.0B foundation revision'ı `4f9d2a6b8c10`, Milestone 5.0C scope-claim revision'ı `5c1a7e9d3b20`, Milestone 5.0D sonrasındaki güncel Alembic head ise `8b6e4d2c1a90`'dır.
+**Persistence modelleri ve tablo sahipliği:** `orchestration_runs` run identity, request fingerprint, terminal status/versions ve terminal content digest'in; `orchestration_engine_executions` sıralı motor execution metadata'sı, input fingerprint, owner FK ve reuse lineage'ın; `orchestration_errors` structured error history'sinin; `orchestration_artifacts` finansal olmayan canonical payload ve digest'in; `orchestration_physical_objects` external blob metadata'sının sahibidir. `orchestration_artifact_locations`, canonical artifact/object satırlarını değiştirmeden fiziksel konum indirection'ı için ayrılmış mutable pointer tablosudur. Milestone 5.0B foundation revision'ı `4f9d2a6b8c10`, Milestone 5.0C scope-claim revision'ı `5c1a7e9d3b20`, Milestone 5.0D revision'ı `8b6e4d2c1a90`, Milestone 5.0E identity foundation/enforcement revision'ları `a1e5f0c7d901` ve `b2e5f0c7d902`; güncel tek Alembic head `b2e5f0c7d902`'dir.
 
 **Storage Ownership Matrix — tek payload sahibi ilkesi:**
 
@@ -270,7 +273,7 @@ versioned application contracts + senkron use-case service
 
 **Versioned API contracts:** `X-API-Contract-Version: 1.0.0`, `X-Correlation-ID` ve write isteklerinde `Idempotency-Key` zorunlu boundary girdileridir. `analysis_runs_v1.py` içindeki kapalı Pydantic request/response şemaları, exact 5.0C command/query/DTO/enum sözleşmelerine explicit mapper ile dönüştürülür. `ApplicationOutcome[T]`, sabit HTTP status/error envelope politikasına map edilir. Response serialization/projection başarısızlığı canonical persisted run'ı geri almaz; cevap yalnız güvenli `run_id`, `correlation_id`, `persisted=true` ve recovery endpoint/reference metadata'sı taşır.
 
-**AuthenticationContext ve authorization ayrımı:** API gerçek token/OAuth/OIDC doğrulaması yapmaz; production composition root tarafından sağlanan trusted, immutable ve framework-independent `AuthenticationContext` tüketir. Context; subject, nullable tenant, authentication method/strength, issued/expiry time, correlation ID, claims version, trusted issuer ve authorization context reference taşır. Issuer allowlist, expiry, en fazla 15 dakikalık yaş, 60 saniyelik future skew ve correlation binding fail-closed doğrulanır. `X-User-Id`, `X-Tenant-Id`, `X-Subject-Id` gibi raw identity header'ları trusted identity değildir ve reddedilir. Authentication kimliği doğrular; erişim kararı ayrı `AuthorizationPort` tarafından verilir. Production profile fake authentication, allow-all authorization, fake/no-op required security audit veya eksik adapter kabul etmez.
+**AuthenticationContext ve authorization ayrımı:** 5.0D API boundary'si yalnız trusted, immutable ve framework-independent `AuthenticationContext` tüketir; context üretimini router veya application core'a vermez. Milestone 5.0E'de bu production provider-neutral JWT/JWKS ve authoritative local identity adapter'ıyla bağlanmıştır. Context; subject, nullable tenant, authentication method/strength, issued/expiry time, correlation ID, claims version, trusted issuer ve authorization context reference taşır. Issuer allowlist, expiry, en fazla 15 dakikalık yaş, 60 saniyelik future skew ve correlation binding fail-closed doğrulanır. `X-User-Id`, `X-Tenant-Id`, `X-Subject-Id` gibi raw identity header'ları trusted identity değildir ve reddedilir. Authentication kimliği doğrular; erişim kararı ayrı `AuthorizationPort` tarafından verilir. Production profile fake authentication, allow-all authorization, fake/no-op required security audit veya eksik adapter kabul etmez.
 
 **Subject ve scope binding:** `analysis_run_scope_claims.initiating_subject_id`, run ownership reservation'ını initiating subject'e de bağlar. Aynı run/scope/fingerprint replay yalnız aynı subject için idempotent success olabilir; farklı subject replay `409` conflict'tir. Cross-tenant write/read fail-closed'dur. Aynı tenant içindeki başka subject'in read erişimi ayrıca authorization kararı gerektirir. `RunScopeClaim` hâlâ job/workflow state'i değildir; bu ek binding yalnız immutable ownership reservation'ın bir parçasıdır.
 
@@ -283,6 +286,26 @@ versioned application contracts + senkron use-case service
 **Production composition ve readiness:** `AnalysisApiRuntime`, trusted authentication provider, authorization, durable security audit, best-effort observability, application clock, document/result resolver, admission ve cursor codec binding'lerini doğrular. `PRODUCTION` profilinde eksik veya güvensiz binding fail-closed'dur. `/health/live` yalnız process canlılığını, `/health/ready` ise required adapter/config readiness'ini ayrıntı sızdırmadan bildirir. Built-in OpenAPI/docs URL'leri production uygulamasında kapalıdır; schema contract testleri uygulamanın `openapi()` üretimini doğrudan doğrular. Security audit correctness sınırıdır; observability outage business işlemini bloklamaz. Post-commit audit hatası persisted run'ı geri almaz ve 5.0C warning politikasını korur.
 
 **5.0D kapsam sınırı:** API yalnız senkron request/response use-case adapter'ıdır. Queue, background worker, scheduler, batch runner, UI, distributed lock, automatic retry/backoff, provider-spesifik authentication sistemi ve event sourcing eklenmemiştir. Process-local admission multi-process toplam limit garantisi vermez; uzun süren senkron execution, deployment reverse-proxy/server timeout sözleşmesine tabidir.
+
+### Authentication & Authorization (Milestone 5.0E)
+
+`app/security/**`, Milestone 5.0D'nin trusted-context kabul noktasını gerçek, provider-neutral bir production güvenlik zinciriyle tamamlar. HTTP bearer credential yalnız request boundary'de alınır; `ProviderNeutralJwtVerifier` issuer/audience/algorithm ve zaman claim'lerini doğrular, `BoundedJwksProvider` ise bounded JWKS discovery/cache/refresh sınırını uygular. `none`, allowlist dışı veya algorithm-confusion girişimleri, unknown `kid`, geçersiz imza, expired/not-yet-valid/future token, stale key ve provider outage grant üretmez. Raw `X-User-Id`, `X-Tenant-Id` veya benzeri identity header'ları hâlâ güven kaynağı değildir.
+
+**Identity ve tenant authoritative modeli:** PostgreSQL'deki `security_tenants`, `security_principals`, `security_subject_bindings`, `security_memberships`, `security_permissions`, `security_roles`, `security_role_permissions` ve `security_membership_roles` tabloları tenant, HUMAN/SERVICE principal, issuer+subject binding, membership ve rol/permission sahipliğinin canonical kaynağıdır. `SqlAlchemySecurityIdentityRepository`, her resolution'da bu kaynağı yeniden okur; positive identity/authorization cache yoktur. Tenant, binding, principal ve membership status/validity/version kontrolleri ile `token_iat < max(principal.tokens_valid_after, membership revocation boundary)` kuralı mikrosaniyeli UTC `TIMESTAMPTZ` sınırında fail-closed uygulanır; eşit timestamp kabul edilir. HUMAN ve SERVICE aynı tenant membership modelini kullanır, fakat permission safety eksenleri ayrıdır; SERVICE yalnız service-safe rol/permission kümesiyle çözülür.
+
+**Provisioning ve revocation:** `SqlAlchemyIdentityProvisioningService`, trusted internal provisioning authority üzerinden tenant/principal/binding/membership/rol ilişkilerini idempotent ve transaction-safe biçimde kurar; public role-management API veya UI yoktur. `security_provisioning_operations` authority+idempotency key replay'ini bağlar. Revocation principal ve membership sınırlarında authoritative state değişikliğidir; sonraki request resolution bunu cache gecikmesi olmadan görür. Historical tenant binding, açık internal service ile doğrulanır; enforce migration'ı bağlanmamış eski satırları quarantine eder ve tenant FK'lerini fail-closed hale getirir.
+
+**Permission registry ve policy engine:** Kapalı `PERMISSION_REGISTRY` exact 33 permission/action içerir. Altı built-in rol (`TENANT_ADMIN`, `FINANCE_ADMIN`, `FINANCE_ANALYST`, `REPORT_VIEWER`, `AUDITOR`, `SERVICE_OPERATOR`) için 6 × 33 exhaustive role matrix import/test zamanında doğrulanır; custom roller authoritative PostgreSQL yolundan materialize edilir. `AuthorizationPolicyEngine`, 11 üyeli `PolicyScopeType`, 17 üyeli reason taxonomy ve 18 basamaklı fail-fast precedence ile immutable `PolicyEvaluationResult` üretir. Resource çözümleme yalnız `ResourceSecurityReference → engine-selected resolver → authoritative ResourceSecurityScope` yolunu kullanır. Durable kaynaklarda Model A tenant-qualified hiding geçerlidir: unknown ve cross-tenant kaynak aynı `RESOURCE_NOT_FOUND` sonucuna gider; unscoped fallback veya existence probe yoktur. Owner ile initiator birbirinin yerine kullanılmaz.
+
+**Request-bound context ve 5.0C adapter:** `RequestBoundAuthenticationContextProvider` doğrulanmış JWT ile authoritative local identity'yi immutable 5.0D `AuthenticationContext`'e map eder. `RequestBoundTrustedAuthorizationContextProvider`, her request/checkpoint için identity, resource ve correlation bağını process-global state kullanmadan sağlar. `LocalAuthorizationPolicyClient`, değişmemiş 5.0C `AuthorizationPort`'u uygular; Adım 9 identity repository ve Adım 10 policy repository/engine sonuçlarını değişmemiş `AuthorizationDecision`'a fail-closed map eder. Pre-execution kontrolü ile pre-persistence revalidation ayrı fresh değerlendirmelerdir; aradaki principal, membership, policy veya resource revoke terminal persistence'ı engeller.
+
+**API ve legacy route protection:** `AnalysisRequestSecuritySession`, analysis-run endpoint'lerinde request-bound authentication, exact action authorization, admission ve audit lifecycle'ını izole eder. Executable route registry exact 28 kayıttır: yalnız `/health/live` ve `/health/ready` public; sekiz analysis-run ve on sekiz legacy route protected'dır. Legacy company/period/document/analysis/trial-balance/bulk-upload read ve write yolları authoritative tenant'a scope edilir; bulk classification, duplicate detection, resolution ve confirm lineage da cross-tenant kaynağı kullanamaz. Registry ile FastAPI route envanteri startup/test zamanında birebir karşılaştırılır; yeni ve sınıflandırılmamış route ready sayılmaz.
+
+**Audit, redaction ve HTTP failure yüzeyi:** Authentication ve authorization security event'leri durable `SecurityAuditPort` üzerinden teslim edilir; required pre-execution/detailed decision audit outage'ı fail-closed'dur. Policy engine yalnız deterministic audit intent üretir, sink çağrısını adapter sahiplenir. Token, raw claim, subject, issuer, tenant key, SQL/DSN, stack trace ve PII event/error/metric/log yüzeyine taşınmaz; correlation ve subject yalnız safe canonical hash/reference ile temsil edilir. HTTP mapping kapalıdır: missing/invalid authentication `401` ve doğru `WWW-Authenticate`, authenticated deny `403`, hidden resource `404`, run/scope/subject conflict `409`, admission saturation `429` + `Retry-After`, required provider outage `503`; raw upstream exception response'a sızmaz.
+
+**Production composition ve readiness:** `PRODUCTION` profili gerçek request authentication factory, identity/policy/resource repository'leri, authorization adapter, durable security audit, application clock, admission ve input resolver binding'lerini startup ve readiness sırasında doğrular. Fake/test authentication, allow-all authorization, in-memory/no-op required audit veya eksik binding production'da yasaktır. Identity/policy PostgreSQL, JWKS verifier/provider, audit sink ve clock availability aktif readiness kontrolleridir; observability outage correctness'i bloklamaz. Production docs/OpenAPI kapalıdır; live endpoint yalnız process canlılığını, ready endpoint ise hassas ayrıntı vermeden required dependency durumunu bildirir.
+
+**5.0E kapsam sınırı:** OAuth/OIDC provider'a özgü login/consent UI, browser session/cookie, MFA enrollment, public provisioning/role administration endpoint'i, queue/worker/scheduler/UI, distributed authorization cache/lock ve event sourcing eklenmemiştir. 5.0A–5.0D public sözleşmeleri ve engine hesaplama davranışı değişmemiştir.
 
 API katmanı ile engine katmanı arasındaki köprü, `app/engines/protocol.py`'de tanımlı `EngineSourceRef`/`EngineRunContext` sözleşme katmanıdır (Milestone 4.1+). Bu dosya, kalıcılık katmanının engine sonuçlarını nasıl referanslayacağını tanımlar; engine'lerin kendisi bu sözleşmeye bağımlı değildir — bağımlılık tek yönlüdür (API → engine, asla tersi değil).
 
@@ -633,11 +656,13 @@ FINOS iki paralel test rejimi kullanır:
 
 **A. Sandbox test rejimi** (bu konuşma/implementasyon ortamında kullanılır): `sqlalchemy`/`fastapi`/`pydantic` paketleri PyPI proxy'den kurulamadığı için, `app.models` için `sys.modules`'e önceden kaydedilen bir stub namespace paketi tekniğiyle, `app/models/__init__.py`'nin eager ORM importlarını hiç çalıştırmadan yalnızca `app.engines.**` (SIFIR sqlalchemy bağımlılığı) testlerini gerçekten çalıştırmak mümkündür (`run_tests.py`). Bu rejim, hızlı geri bildirim döngüsü için kullanılır ama **nihai kabul kriteri değildir.**
 
-**B. Gerçek Docker test rejimi** (nihai kabul kriteri): `PYTHONPATH=/app python -m pytest tests/ -v`, tam bağımlılık kurulu gerçek bir konteynerde çalıştırılır. **Hiçbir milestone, gerçek Docker ortamında `0 failed` sonucu görülmeden "tamamlandı" ilan edilemez.** Milestone 4.4, bu rejimde 886/886 test ile; Milestone 5.0A (Analysis Orchestrator), 971/971 test ile; Milestone 5.0B (Orchestration Persistence & Recovery Foundation), 998/998 test ile; Milestone 5.0C (Analysis Application Layer), 1042/1042 test ile; Milestone 5.0D (API & Integration Layer) ise **1066 passed, 0 failed, 0 skipped** ile doğrulanmıştır. Son koşuda ayrıca 13 mevcut dependency deprecation warning'i raporlanmıştır.
+**B. Gerçek Docker test rejimi** (nihai kabul kriteri): `PYTHONPATH=/app python -m pytest tests/ -v`, tam bağımlılık kurulu gerçek bir konteynerde çalıştırılır. **Hiçbir milestone, gerçek Docker ortamında `0 failed` sonucu görülmeden "tamamlandı" ilan edilemez.** Milestone 4.4, bu rejimde 886/886 test ile; Milestone 5.0A (Analysis Orchestrator), 971/971 test ile; Milestone 5.0B (Orchestration Persistence & Recovery Foundation), 998/998 test ile; Milestone 5.0C (Analysis Application Layer), 1042/1042 test ile; Milestone 5.0D (API & Integration Layer), 1066/1066 test ile; Milestone 5.0E (Authentication & Authorization) ise **1716 passed, 0 failed, 0 skipped** ile doğrulanmıştır. Son koşuda 22 dependency/Alembic deprecation warning'i raporlanmıştır; bunlar test failure değildir.
 
-**İki katmanlı entegrasyon testi ayrımı** (`tests/README.md`): API-sözleşme testleri SQLite üzerinde çalışır (hızlı, izole); gerçek entegrasyon testleri `TEST_DATABASE_URL`/`DATABASE_URL` ortam değişkeni ile gate'lenmiş gerçek PostgreSQL üzerinde çalışır ve ortam değişkeni yoksa `pytest.skip` ile zarifçe atlanır. Milestone 5.0B'nin PostgreSQL testleri gerçek constraint/trigger davranışını, negatif resume binding ve owner-integrity senaryolarını, idempotency çatışmasını, cursor'ın ikinci sayfasını ve migration `upgrade → downgrade → upgrade` çevrimini gerçek SQL ile doğrular. Milestone 5.0C PostgreSQL/concurrency testleri; RunScopeClaim uniqueness ve cross-tenant yarışlarını, wrong-scope finalize/projection reddini, BS/IS/Ratio owner-lineage assembly'yi ve concurrent loser SAVEPOINT rollback/discard güvenliğini gerçek transaction'larla doğrular. Milestone 5.0D testleri; sekiz router operation'ını, exact request/response mapping'i, raw identity header reddini, authentication freshness/trust kontrollerini, authorization ve subject/scope fail-closed davranışını, trusted document/result provenance bütünlüğünü, HMAC cursor tamper/rotation kurallarını, admission saturation/lease release'i, query error ayrımını, OpenAPI operation ID'lerini, financial digest immutability'yi ve cross-tenant/concurrent persistence yarışlarını kapsar. Güncel Alembic head `8b6e4d2c1a90`'dır.
+**İki katmanlı entegrasyon testi ayrımı** (`tests/README.md`): API-sözleşme testleri SQLite üzerinde çalışır (hızlı, izole); gerçek entegrasyon testleri `TEST_DATABASE_URL`/`DATABASE_URL` ortam değişkeni ile gate'lenmiş gerçek PostgreSQL üzerinde çalışır ve ortam değişkeni yoksa `pytest.skip` ile zarifçe atlanır. Milestone 5.0B'nin PostgreSQL testleri gerçek constraint/trigger davranışını, negatif resume binding ve owner-integrity senaryolarını, idempotency çatışmasını, cursor'ın ikinci sayfasını ve migration `upgrade → downgrade → upgrade` çevrimini gerçek SQL ile doğrular. Milestone 5.0C PostgreSQL/concurrency testleri; RunScopeClaim uniqueness ve cross-tenant yarışlarını, wrong-scope finalize/projection reddini, BS/IS/Ratio owner-lineage assembly'yi ve concurrent loser SAVEPOINT rollback/discard güvenliğini gerçek transaction'larla doğrular. Milestone 5.0D testleri sekiz router operation'ını, trusted input resolution, HMAC cursor, admission ve HTTP schema sınırlarını kapsar. Milestone 5.0E testleri JWT/JWKS negatif saldırı yüzeyini, provisioning/revocation'ı, 19 kodlu identity resolution taxonomy'sini, HUMAN/SERVICE permission safety'yi, 33 action ve 198 built-in role-matrix hücresini, 17 policy reason reachability'yi, Model A hiding'i, request-bound context izolasyonunu, `AuthorizationPort` mapping/revalidation/audit delivery'yi, exact 28-route registry'yi, legacy tenant scoping'i ve production composition/readiness'i doğrular. Güncel tek Alembic head `b2e5f0c7d902`'dir.
 
 **5.0D ayrı kapanış kapıları:** Tam pakete ek olarak router/API integration 15/15, PostgreSQL/migration integration 33/33, authentication/authorization/security 8/8, concurrency/admission-control 7/7 ve OpenAPI/schema contract 12/12 test ile bağımsız çalıştırılmıştır; tümünde `0 failed` sonucu alınmıştır.
+
+**5.0E ayrı kapanış kapıları:** JWT/JWKS, provisioning, E2 enforcement, identity repository/revocation, policy engine, 5.0C authorization adapter, request-bound authentication ve route/legacy security testleri birlikte **638 passed, 0 failed, 0 skipped** sonucunu vermiştir. Analysis application/API revalidation ve gerçek migration-cycle grubu ayrıca **33 passed, 0 failed, 0 skipped** ile doğrulanmıştır. Isolated PostgreSQL üzerinde `upgrade → downgrade → upgrade` çevrimi geçmiş; backend ve PostgreSQL servisleri sağlıklı kalmıştır.
 
 **Sentetik fixture üretimi:** `tests/data/synthetic/generate_fixtures.py`, pandas + tek seferlik `soffice --headless` (LibreOffice) dönüştürmesiyle test mizan dosyaları üretir; LibreOffice bağımlılığı **proje bağımlılığı olarak eklenmemiştir** — yalnızca fixture üretimi için tek seferlik yerel bir araçtır.
 
@@ -727,7 +752,7 @@ Aşağıdaki işlemler, hiçbir engine/servis kodunda **kesinlikle yasaktır**. 
 - **Duplicate payload owner yasak** — aynı canonical engine result payload'ı birden fazla tabloda tutulamaz; execution/history satırları yalnız Storage Ownership Matrix'in belirlediği tek owner'a FK ile bağlanır.
 - **Event sourcing yasak** — immutable terminal audit history, event stream değildir; orchestration event replay, CQRS read model veya ara-state event persistence ayrı bir açık milestone olmadan eklenemez.
 - **Saf Orchestrator'a persistence sızıntısı yasak** — `app/engines/analysis_orchestrator/**`, SQLAlchemy, ORM model, repository, artifact store veya başka bir persistence bileşeni import edemez.
-- **Kapsam dışı prod kodu yasak** (ayrı milestone onayı olmadıkça) — onaylı Milestone 5.0D envanteri dışındaki yeni API endpoint'i, queue/background worker, scheduler, batch runner, CLI/UI, gerçek PDF/DOCX/HTML render, provider/framework-spesifik token/OAuth/OIDC sistemi, dashboard canlı yenileme/websocket/polling/cache katmanı. Milestone 5.0B persistence foundation, Milestone 5.0C senkron application/use-case katmanı ve Milestone 5.0D'nin exact HTTP/integration adapter'ı bu genel yasağın açık ve sınırlı istisnalarıdır.
+- **Kapsam dışı prod kodu yasak** (ayrı milestone onayı olmadıkça) — onaylı Milestone 5.0D/5.0E route ve security envanteri dışındaki yeni API endpoint'i, queue/background worker, scheduler, batch runner, CLI/UI, gerçek PDF/DOCX/HTML render, provider-spesifik login/consent UI, browser session/cookie veya MFA enrollment, dashboard canlı yenileme/websocket/polling/cache katmanı. Milestone 5.0B persistence foundation, Milestone 5.0C senkron application/use-case katmanı, Milestone 5.0D'nin exact HTTP/integration adapter'ı ve Milestone 5.0E provider-neutral authentication/authorization katmanı bu genel yasağın açık ve sınırlı istisnalarıdır.
 
 ---
 
@@ -735,7 +760,7 @@ Aşağıdaki işlemler, hiçbir engine/servis kodunda **kesinlikle yasaktır**. 
 
 ```
 backend/
-├── alembic/                          # DB migration'ları (head: 8b6e4d2c1a90)
+├── alembic/                          # DB migration'ları (head: b2e5f0c7d902)
 ├── alembic.ini
 ├── requirements.txt                  # fastapi, sqlalchemy, alembic, psycopg,
 │                                      # pydantic-settings, pandas, openpyxl,
@@ -749,6 +774,7 @@ backend/
 │   ├── models/                       # SQLAlchemy ORM modelleri
 │   │   ├── orchestration_persistence.py  # 5.0B immutable run/execution/artifact/error modelleri
 │   │   ├── analysis_run_scope_claim.py   # 5.0C/5.0D scope + initiating-subject reservation
+│   │   ├── security.py               # 5.0E tenant/principal/binding/membership/role state'i
 │   │   └── financial_analysis_result.py  # Financial owner + canonical result digest
 │   ├── schemas/                      # Pydantic şemaları (API boundary)
 │   │   └── analysis_runs_v1.py       # 5.0D versioned request/response/error sözleşmeleri
@@ -785,7 +811,20 @@ backend/
 │   │       ├── read_facade.py         # Typed read error/category preservation
 │   │       ├── runtime.py             # Production profile adapter validation
 │   │       ├── dependencies.py        # Session-factory/transaction-aware composition
+│   │       ├── router_security.py      # 5.0E request-bound authn/authz/audit session'ı
+│   │       ├── legacy_security.py      # 28-route registry ve legacy tenant protection
 │   │       └── errors.py              # ApplicationOutcome → safe HTTP error mapping
+│   ├── security/                      # 5.0E Authentication & Authorization core/adapters
+│   │   ├── contracts.py               # Identity/JWT/provisioning immutable sözleşmeleri
+│   │   ├── jwt.py, jwks.py            # Provider-neutral verifier ve bounded key provider
+│   │   ├── provisioning.py            # Idempotent authoritative identity provisioning
+│   │   ├── historical_binding.py      # Historical tenant binding/quarantine servisi
+│   │   ├── identity.py                # Fresh PostgreSQL identity/revocation resolution
+│   │   ├── policy.py                  # 33 permission + 6 built-in role registry'si
+│   │   ├── authorization_policy.py    # 17-reason deterministic policy engine
+│   │   ├── policy_repositories.py     # Tenant-qualified PostgreSQL resource/policy adapter'ları
+│   │   ├── authorization_adapter.py   # Değişmemiş 5.0C AuthorizationPort adapter'ı
+│   │   └── request_authentication.py  # Request-bound trusted context provider'ları
 │   ├── trial_balance/                # Mizan ayrıştırma, normalize etme, hesap ağacı
 │   │   └── parsers/                  # Format-özel ayrıştırıcılar
 │   └── engines/
@@ -839,6 +878,13 @@ backend/
     ├── test_analysis_runs_api.py          # 5.0D router/OpenAPI/subject/admission testleri
     ├── test_analysis_http_*.py            # Auth, resolver, cursor, read-facade testleri
     ├── test_analysis_api_integrity_postgres.py # Digest/subject DB bütünlük testleri
+    ├── test_security_jwt.py, test_security_jwks.py
+    ├── test_security_identity_repository_postgres.py
+    ├── test_security_authorization_policy*.py
+    ├── test_security_authorization_adapter*.py
+    ├── test_security_request_authentication.py
+    ├── test_security_legacy_routes.py
+    ├── test_security_production_readiness.py
     └── test_<engine>_<aspect>_unit.py    # Her engine için ayrı test dosyaları
 ```
 
@@ -954,6 +1000,16 @@ Bir milestone'un "üretime hazır" (%100 Production Readiness) ilan edilebilmesi
 - [ ] API, PostgreSQL, authentication/security, concurrency/admission ve OpenAPI/schema kapanış testleri ayrı kapılar olarak `0 failed` sonucu veriyor.
 - [ ] Post-commit audit failure canonical başarıyı warning ile koruyor; post-persistence DTO projection failure run'ı geri almadan read recovery sağlıyor.
 - [ ] Local `ActiveExecutionPort` yalnız cancellation/diagnostics için kullanılıyor; same-process ve cross-process duplicate semantiği persistence-idempotency bakımından eşit.
+- [ ] JWT doğrulaması issuer/audience/algorithm/time allowlist'lerini uygular; unknown `kid`, stale JWKS, key rotation/outage ve signature failure hiçbir koşulda fail-open olmaz.
+- [ ] Tenant/principal/subject binding/membership/role state'i authoritative PostgreSQL'den fresh çözülür; principal ve membership revocation boundary'leri negatif ve mikrosaniyeli exact-boundary testleriyle doğrulanır.
+- [ ] HUMAN/SERVICE permission eksenleri ayrıdır; 33 action, altı built-in rolün 198 hücreli matrisi, custom-role proof/version/digest ve unknown permission/role/version fail-closed davranışı exhaustive test edilir.
+- [ ] Policy engine'in 17 reason'ı, 18 basamaklı precedence'i, 11 scope resolver'ı, owner/initiator predicate'leri ve Model A cross-tenant hiding davranışı deterministik/reachability testleriyle doğrulanır.
+- [ ] Değişmemiş 5.0C `AuthorizationPort` adapter'ı required detailed audit delivery'yi ve pre-persistence identity/policy/resource revalidation'ı fresh state ile fail-closed uygular.
+- [ ] Request-bound authentication/authorization context'i concurrent request'ler arasında sızmaz; raw token/claim/subject/issuer/tenant/PII safe error, audit, metric, log veya response yüzeyine çıkmaz.
+- [ ] Executable route registry FastAPI envanteriyle exact eşleşir; yalnız live/ready public, analysis-run ve legacy route'ların tamamı protected'dır. Legacy read/write/bulk resolution yolları tenant-qualified'dır.
+- [ ] Production composition fake/test authentication, allow-all authorization, no-op/in-memory required audit ve eksik dependency'yi reddeder; JWKS, PostgreSQL identity/policy ve audit availability readiness'i belirler.
+- [ ] Authentication/authorization HTTP mapping'i `401/403/404/409/429/503`, `WWW-Authenticate`, existence hiding ve raw-exception redaction kurallarıyla contract testlerinden geçer.
+- [ ] Security migration zinciri tek head'dir ve isolated PostgreSQL üzerinde `upgrade → downgrade → upgrade` çevrimini geçer.
 - [ ] Commit/push YAPILMADI (yalnızca kullanıcı açıkça isterse yapılır).
 
 ---
@@ -1010,7 +1066,7 @@ feat(persistence): Company/FinancialPeriod/FinancialDocument altyapısı
 
 ## 27. Mimari Prensiplerin Kısa Özeti
 
-FINOS'un mimarisi, aşağıdaki yirmi iki prensibe indirgenebilir:
+FINOS'un mimarisi, aşağıdaki yirmi altı prensibe indirgenebilir:
 
 1. **Denetlenebilirlik önce gelir.** Her sayı, kaynağına kadar izlenebilir olmalıdır (provenance, source_engine_codes, section_source_mapping).
 2. **Determinizm mutlaktır.** Aynı girdi → aynı çıktı, her zaman. Sistem saati, rastgelelik, global durum bu garantiyi asla bozamaz.
@@ -1034,9 +1090,13 @@ FINOS'un mimarisi, aşağıdaki yirmi iki prensibe indirgenebilir:
 20. **Kimlik caller header'ından değil, trusted context'ten gelir.** Raw identity header'ları güven kaynağı değildir. AuthenticationContext production composition tarafından sağlanır ve freshness/issuer/correlation kurallarıyla doğrulanır; authentication ile authorization ayrı fail-closed kararlardır.
 21. **Persisted provenance, gerçek computation input'una cryptographic olarak bağlıdır.** Document ve analysis-result ID'leri yalnız metadata değildir; input authoritative resolver tarafından aynı scope/type/status ve checksum/canonical digest doğrulamasıyla materialize edilir. Bağ doğrulanmadan hesaplama başlamaz.
 22. **Overload koruması idempotency değildir.** Process-local admission sonlu global/tenant/subject lease'leriyle senkron HTTP yükünü sınırlar ve saturation'ı `429` ile bildirir; distributed correctness, run ownership veya terminal idempotency kararı vermez.
+23. **Authentication ve authorization ayrı, fail-closed güvenlik sınırlarıdır.** JWT/JWKS token'ın trusted issuer adına kimlik kanıtı olduğunu doğrular; PostgreSQL identity ve policy state'i bu kimliğin hangi tenant/resource action'ına erişebileceğini ayrıca belirler. Birinin başarısı diğerinin grant'i değildir.
+24. **Tenant state ve permission state authoritative storage'dan fresh okunur.** Positive identity/authorization cache yoktur. Principal, membership, binding, role, policy veya resource revoke bir sonraki resolution/revalidation'da görülür; outage, unknown proof/version ve integrity failure izin üretmez.
+25. **Kaynak varlığı tenant sınırını delemez.** Durable resource çözümleme yalnız tenant-qualified Model A lookup kullanır; unknown ve cross-tenant kaynak aynı hidden not-found sonucuna gider. Unscoped existence probe veya fallback yasaktır; owner ve initiator farklı semantik kimliklerdir.
+26. **Route güvenliği executable registry ile kapalı envanterdir.** Yalnız açıkça public ilan edilen live/ready endpoint'leri authentication istemez. Analysis-run ve legacy yüzeylerin tamamı request-bound context, exact action authorization, tenant scoping, audit/redaction ve production composition doğrulamasına tabidir; sınıflandırılmamış route production-ready değildir.
 
-Bu yirmi iki prensip, bu kitabın geri kalan bölümlerinin özüdür. Yeni bir milestone tasarlanırken bir kural belirsizse, doğru cevap her zaman bu yirmi iki prensibin en katı yorumudur.
+Bu yirmi altı prensip, bu kitabın geri kalan bölümlerinin özüdür. Yeni bir milestone tasarlanırken bir kural belirsizse, doğru cevap her zaman bu yirmi altı prensibin en katı yorumudur.
 
 ---
 
-*Bu doküman, FINOS mimarisinin Milestone 5.0D itibarıyla (1066 passed, 0 failed, 0 skipped; Docker-doğrulanmış, router/API, PostgreSQL/migration, authentication/authorization/security, concurrency/admission-control ve OpenAPI/schema testleri dahil) durumunu yansıtır. Analysis Platform artık saf engine ve Orchestrator katmanları, immutable persistence/recovery foundation, framework-bağımsız application use-case katmanı ve trusted, versioned HTTP/integration boundary'sinden oluşur. Queue, worker, scheduler, batch runner, UI, distributed lock, automatic retry/backoff, provider-spesifik authentication sistemi ve event sourcing mevcut değildir. Gelecekteki her milestone bu kitaba uymalı; bu kitapla çelişen her tasarım kararı ayrı bir onaylı revizyon turunda bu kitaba işlenmelidir.*
+*Bu doküman, FINOS mimarisinin Milestone 5.0E itibarıyla (1716 passed, 0 failed, 0 skipped; Docker-doğrulanmış JWT/JWKS, PostgreSQL identity/provisioning/revocation, authorization policy/adapter, request-bound context, route protection, audit/redaction, migration-cycle ve production readiness testleri dahil) durumunu yansıtır. Analysis Platform artık saf engine ve Orchestrator katmanları, immutable persistence/recovery foundation, framework-bağımsız application use-case katmanı, trusted/versioned HTTP integration boundary'si ve provider-neutral, fail-closed Authentication & Authorization katmanından oluşur. Güncel tek Alembic head `b2e5f0c7d902`'dir. Queue, worker, scheduler, batch runner, UI, distributed lock, automatic retry/backoff, provider-spesifik login/consent UI, browser session/cookie, MFA enrollment ve event sourcing mevcut değildir. 5.0A–5.0D public sözleşmeleri değişmemiştir. Gelecekteki her milestone bu kitaba uymalı; bu kitapla çelişen her tasarım kararı ayrı bir onaylı revizyon turunda bu kitaba işlenmelidir.*
