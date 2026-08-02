@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -14,6 +14,10 @@ from app.api.v1.trial_balances import router as trial_balances_router
 from app.trial_balance.service import analyze_trial_balance
 from app.integrations.analysis_http.dependencies import get_analysis_api_runtime
 from app.integrations.analysis_http.errors import ApiBoundaryError
+from app.integrations.analysis_http.legacy_security import (
+    require_legacy_route_security,
+    validate_registered_route_inventory,
+)
 
 
 app = FastAPI(
@@ -52,20 +56,6 @@ async def analysis_api_validation_error_handler(request: Request, error: Request
     return boundary_error_response(boundary)
 
 
-@app.get("/")
-def root():
-    return {
-        "application": "FINOS",
-        "status": "running",
-        "version": "0.5.0",
-    }
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
 @app.get("/health/live", include_in_schema=False)
 def health_live():
     return {"status": "live"}
@@ -75,19 +65,7 @@ def health_live():
 def health_ready():
     try:
         runtime = get_analysis_api_runtime()
-        runtime.validate()
-        deadline = runtime.clock.now_audit_time()
-        required = (
-            runtime.authentication_context_provider,
-            runtime.authorization,
-            runtime.security_audit,
-            runtime.clock,
-            runtime.document_inputs,
-            runtime.result_inputs,
-            runtime.admission,
-            runtime.cursor_codec,
-        )
-        ready = all(binding.readiness_check(deadline) for binding in required)
+        ready = runtime.readiness_check()
     except Exception:
         ready = False
     return JSONResponse(
@@ -96,7 +74,10 @@ def health_ready():
     )
 
 
-@app.post("/api/v1/trial-balance/validate")
+@app.post(
+    "/api/v1/trial-balance/validate",
+    dependencies=[Depends(require_legacy_route_security)],
+)
 async def validate_trial_balance(
     file: UploadFile = File(...),
 ):
@@ -139,5 +120,8 @@ async def validate_trial_balance(
     except Exception as error:
         raise HTTPException(
             status_code=400,
-            detail=f"Excel dosyası analiz edilemedi: {error}",
+            detail="Excel dosyası analiz edilemedi.",
         ) from error
+
+
+validate_registered_route_inventory(app)

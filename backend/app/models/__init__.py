@@ -34,6 +34,18 @@ from app.models.orchestration_persistence import (
     OrchestrationPhysicalObject,
     OrchestrationRun,
 )
+from app.models.security import (
+    SecurityMembership,
+    SecurityMembershipRole,
+    SecurityPermission,
+    SecurityPrincipal,
+    SecurityProvisioningOperation,
+    SecurityResourceBindingQuarantine,
+    SecurityRole,
+    SecurityRolePermission,
+    SecuritySubjectBinding,
+    SecurityTenant,
+)
 
 __all__ = [
     "Company",
@@ -62,4 +74,14 @@ __all__ = [
     "OrchestrationArtifactLocation",
     "OrchestrationError",
     "AnalysisRunScopeClaim",
+    "SecurityTenant",
+    "SecurityPrincipal",
+    "SecuritySubjectBinding",
+    "SecurityMembership",
+    "SecurityPermission",
+    "SecurityRole",
+    "SecurityRolePermission",
+    "SecurityMembershipRole",
+    "SecurityProvisioningOperation",
+    "SecurityResourceBindingQuarantine",
 ]

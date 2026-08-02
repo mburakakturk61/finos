@@ -10,9 +10,16 @@ from app.db.session import get_db
 from app.models.company import Company
 from app.schemas.company import CompanyCreate, CompanyRead
 from app.schemas.pagination import Page
+from app.integrations.analysis_http.legacy_security import (
+    require_legacy_route_security,
+    resolve_legacy_tenant_id,
+)
 
 
-router = APIRouter(prefix="/api/v1/companies", tags=["companies"])
+router = APIRouter(
+    prefix="/api/v1/companies", tags=["companies"],
+    dependencies=[Depends(require_legacy_route_security)],
+)
 
 
 @router.post(
@@ -23,8 +30,9 @@ router = APIRouter(prefix="/api/v1/companies", tags=["companies"])
 def create_company(
     payload: CompanyCreate,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> Company:
-    company = Company(**payload.model_dump())
+    company = Company(tenant_id=tenant_id, **payload.model_dump())
     db.add(company)
 
     try:
@@ -43,6 +51,7 @@ def create_company(
 @router.get("", response_model=Page[CompanyRead])
 def list_companies(
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
 ) -> Page[CompanyRead]:
@@ -52,10 +61,12 @@ def list_companies(
         settings.max_page_limit,
     )
 
-    total = db.scalar(select(func.count()).select_from(Company)) or 0
+    scope_filter = Company.tenant_id == tenant_id if tenant_id is not None else True
+    total = db.scalar(select(func.count()).select_from(Company).where(scope_filter)) or 0
 
     companies = db.scalars(
         select(Company)
+        .where(scope_filter)
         .order_by(Company.created_at.desc(), Company.id)
         .offset(offset)
         .limit(effective_limit)
@@ -73,8 +84,12 @@ def list_companies(
 def get_company(
     company_id: uuid.UUID,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> Company:
-    company = db.get(Company, company_id)
+    query = select(Company).where(Company.id == company_id)
+    if tenant_id is not None:
+        query = query.where(Company.tenant_id == tenant_id)
+    company = db.scalar(query)
 
     if company is None:
         raise HTTPException(

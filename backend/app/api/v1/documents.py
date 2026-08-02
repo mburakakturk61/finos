@@ -9,16 +9,24 @@ from app.db.session import get_db
 from app.models.financial_analysis_result import FinancialAnalysisResult
 from app.models.financial_document import FinancialDocument
 from app.models.financial_period import FinancialPeriod
+from app.models.company import Company
 from app.schemas.financial_analysis_result import FinancialAnalysisResultSummary
 from app.schemas.financial_document import FinancialDocumentRead
 from app.schemas.pagination import Page
+from app.integrations.analysis_http.legacy_security import require_legacy_route_security, resolve_legacy_tenant_id
 
 
-router = APIRouter(prefix="/api/v1", tags=["documents"])
+router = APIRouter(
+    prefix="/api/v1", tags=["documents"],
+    dependencies=[Depends(require_legacy_route_security)],
+)
 
 
-def _get_period_or_404(period_id: uuid.UUID, db: Session) -> FinancialPeriod:
-    period = db.get(FinancialPeriod, period_id)
+def _get_period_or_404(period_id: uuid.UUID, db: Session, tenant_id: uuid.UUID | None) -> FinancialPeriod:
+    query = select(FinancialPeriod).join(Company).where(FinancialPeriod.id == period_id)
+    if tenant_id is not None:
+        query = query.where(Company.tenant_id == tenant_id)
+    period = db.scalar(query)
 
     if period is None:
         raise HTTPException(
@@ -29,8 +37,11 @@ def _get_period_or_404(period_id: uuid.UUID, db: Session) -> FinancialPeriod:
     return period
 
 
-def _get_document_or_404(document_id: uuid.UUID, db: Session) -> FinancialDocument:
-    document = db.get(FinancialDocument, document_id)
+def _get_document_or_404(document_id: uuid.UUID, db: Session, tenant_id: uuid.UUID | None) -> FinancialDocument:
+    query = select(FinancialDocument).join(Company).where(FinancialDocument.id == document_id)
+    if tenant_id is not None:
+        query = query.where(Company.tenant_id == tenant_id)
+    document = db.scalar(query)
 
     if document is None:
         raise HTTPException(
@@ -48,10 +59,11 @@ def _get_document_or_404(document_id: uuid.UUID, db: Session) -> FinancialDocume
 def list_period_documents(
     period_id: uuid.UUID,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
 ) -> Page[FinancialDocumentRead]:
-    _get_period_or_404(period_id, db)
+    _get_period_or_404(period_id, db, tenant_id)
 
     settings = get_settings()
     effective_limit = min(
@@ -88,8 +100,9 @@ def list_period_documents(
 def get_document(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> FinancialDocument:
-    return _get_document_or_404(document_id, db)
+    return _get_document_or_404(document_id, db, tenant_id)
 
 
 @router.get(
@@ -99,10 +112,11 @@ def get_document(
 def list_document_analyses(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
 ) -> Page[FinancialAnalysisResultSummary]:
-    _get_document_or_404(document_id, db)
+    _get_document_or_404(document_id, db, tenant_id)
 
     settings = get_settings()
     effective_limit = min(

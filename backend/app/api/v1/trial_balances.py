@@ -2,10 +2,12 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.financial_period import FinancialPeriod
+from app.models.company import Company
 from app.schemas.trial_balance_upload import TrialBalanceUploadResponse
 from app.services.trial_balance_upload import (
     DuplicateChecksumError,
@@ -13,11 +15,15 @@ from app.services.trial_balance_upload import (
     UploadValidationError,
     handle_trial_balance_upload,
 )
+from app.integrations.analysis_http.legacy_security import require_legacy_route_security, resolve_legacy_tenant_id
 
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/periods", tags=["trial-balances"])
+router = APIRouter(
+    prefix="/api/v1/periods", tags=["trial-balances"],
+    dependencies=[Depends(require_legacy_route_security)],
+)
 
 
 @router.post(
@@ -29,8 +35,12 @@ async def upload_trial_balance(
     period_id: uuid.UUID,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> TrialBalanceUploadResponse:
-    period = db.get(FinancialPeriod, period_id)
+    query = select(FinancialPeriod).join(Company).where(FinancialPeriod.id == period_id)
+    if tenant_id is not None:
+        query = query.where(Company.tenant_id == tenant_id)
+    period = db.scalar(query)
     if period is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

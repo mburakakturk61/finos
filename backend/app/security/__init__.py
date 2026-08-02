@@ -1,0 +1,73 @@
+"""Milestone 5.0E framework-independent authentication and authorization core."""
+
+from app.security.contracts import (
+    AuthenticationStrengthRule,
+    IdentityKind,
+    JwtAlgorithm,
+    OidcIssuerProfile,
+    VerifiedJwt,
+)
+from app.security.authorization_policy import (
+    AuthorizationPolicyEngine,
+    EffectivePermissionSet,
+    PolicyEvaluationReasonCode,
+    PolicyEvaluationRequest,
+    PolicyEvaluationResult,
+    PolicyScopeType,
+    ResourceSecurityReference,
+    ResourceSecurityScope,
+    SecurityAction,
+)
+from app.security.authorization_adapter import (
+    AuthorizationAdapterDecisionCode,
+    AuthorizationAuditDeliveryError,
+    AuthorizationAuditDeliveryErrorCode,
+    AuthorizationCheckpoint,
+    AuthorizationDecisionReferenceCodec,
+    AuthorizationRevalidationPort,
+    LocalAuthorizationPolicyClient,
+    TrustedAuthorizationContext,
+    TrustedAuthorizationContextError,
+    TrustedAuthorizationContextErrorCode,
+    TrustedAuthorizationContextProviderPort,
+)
+from app.security.request_authentication import (
+    RequestAuthorizationPlan,
+    RequestAuthorizationTarget,
+    RequestBoundAuthenticationContextProvider,
+    RequestBoundTrustedAuthorizationContextProvider,
+    TrustedRequestIdentityProfile,
+)
+
+__all__ = [
+    "AuthenticationStrengthRule",
+    "AuthorizationPolicyEngine",
+    "AuthorizationAdapterDecisionCode",
+    "AuthorizationAuditDeliveryError",
+    "AuthorizationAuditDeliveryErrorCode",
+    "AuthorizationCheckpoint",
+    "AuthorizationDecisionReferenceCodec",
+    "AuthorizationRevalidationPort",
+    "EffectivePermissionSet",
+    "IdentityKind",
+    "LocalAuthorizationPolicyClient",
+    "JwtAlgorithm",
+    "OidcIssuerProfile",
+    "PolicyEvaluationReasonCode",
+    "PolicyEvaluationRequest",
+    "PolicyEvaluationResult",
+    "PolicyScopeType",
+    "RequestAuthorizationPlan",
+    "RequestAuthorizationTarget",
+    "RequestBoundAuthenticationContextProvider",
+    "RequestBoundTrustedAuthorizationContextProvider",
+    "ResourceSecurityReference",
+    "ResourceSecurityScope",
+    "SecurityAction",
+    "TrustedAuthorizationContext",
+    "TrustedAuthorizationContextError",
+    "TrustedAuthorizationContextErrorCode",
+    "TrustedAuthorizationContextProviderPort",
+    "TrustedRequestIdentityProfile",
+    "VerifiedJwt",
+]

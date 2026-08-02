@@ -81,10 +81,12 @@ GEREK DUYMAZ (Bölüm 65).
 """
 
 from collections.abc import Generator
+import uuid
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -93,6 +95,86 @@ import app.models  # noqa: F401  -- Base.metadata'yı doldurmak için gerekli
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.integrations.analysis_http.legacy_security import (
+    require_legacy_route_security,
+    resolve_legacy_tenant_id,
+)
+from app.models.analysis_run_scope_claim import AnalysisRunScopeClaim
+from app.models.bulk_upload_batch import BulkUploadBatch
+from app.models.company import Company
+
+
+_E2_TEST_TENANT_ID = uuid.UUID("00000000-0000-5000-8000-000000005e20")
+_E2_TEST_TENANT_KEY = "test-default-tenant"
+
+
+def _insert_test_tenant(connection, tenant_id: uuid.UUID, tenant_key: str) -> None:
+    if connection.dialect.name == "postgresql":
+        connection.execute(text("""
+            INSERT INTO security_tenants
+                (id,tenant_key,status,policy_version,version)
+            VALUES (:id,:key,'ACTIVE',1,1)
+            ON CONFLICT (tenant_key) DO NOTHING
+        """), {"id": tenant_id, "key": tenant_key})
+    elif connection.dialect.name == "sqlite":
+        connection.execute(text("""
+            INSERT OR IGNORE INTO security_tenants
+                (id,tenant_key,status,policy_version,version)
+            VALUES (:id,:key,'ACTIVE',1,1)
+        """), {"id": tenant_id.hex, "key": tenant_key})
+
+
+def pytest_sessionstart(session) -> None:
+    """Explicitly bind accumulated shared test data before E2 is applied.
+
+    This is test-only trusted fixture provisioning. Production migrations never
+    infer a tenant and retain the fail-closed E2 behavior.
+    """
+    from app.core.config import get_settings
+
+    test_engine = create_engine(get_settings().database_url)
+    try:
+        with test_engine.begin() as connection:
+            if connection.scalar(text("SELECT to_regclass('security_tenants')")) is None:
+                return
+            _insert_test_tenant(connection, _E2_TEST_TENANT_ID, _E2_TEST_TENANT_KEY)
+            keys = connection.execute(text("""
+                SELECT DISTINCT tenant_id FROM analysis_run_scope_claims
+                WHERE tenant_id ~ '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+                  AND octet_length(tenant_id) BETWEEN 3 AND 63
+            """)).scalars()
+            for tenant_key in keys:
+                tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, "finos-test:" + tenant_key)
+                _insert_test_tenant(connection, tenant_id, tenant_key)
+            connection.execute(text(
+                "UPDATE companies SET tenant_id=:tenant WHERE tenant_id IS NULL"
+            ), {"tenant": _E2_TEST_TENANT_ID})
+            connection.execute(text(
+                "UPDATE bulk_upload_batches SET tenant_id=:tenant WHERE tenant_id IS NULL"
+            ), {"tenant": _E2_TEST_TENANT_ID})
+    finally:
+        test_engine.dispose()
+
+
+@event.listens_for(Company, "before_insert")
+def _bind_test_company_tenant(_mapper, connection, target) -> None:
+    if target.tenant_id is None:
+        _insert_test_tenant(connection, _E2_TEST_TENANT_ID, _E2_TEST_TENANT_KEY)
+        target.tenant_id = _E2_TEST_TENANT_ID
+
+
+@event.listens_for(BulkUploadBatch, "before_insert")
+def _bind_test_batch_tenant(_mapper, connection, target) -> None:
+    if target.tenant_id is None:
+        _insert_test_tenant(connection, _E2_TEST_TENANT_ID, _E2_TEST_TENANT_KEY)
+        target.tenant_id = _E2_TEST_TENANT_ID
+
+
+@event.listens_for(AnalysisRunScopeClaim, "before_insert")
+def _provision_test_claim_tenant(_mapper, connection, target) -> None:
+    if target.tenant_id:
+        tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, "finos-test:" + target.tenant_id)
+        _insert_test_tenant(connection, tenant_id, target.tenant_id)
 
 
 @pytest.fixture(autouse=True)
@@ -317,6 +399,13 @@ def client(engine: Engine) -> Generator[TestClient, None, None]:
             session.close()
 
     app.dependency_overrides[get_db] = override_get_db
+    # Legacy API contract tests predate 5.0E. Security behavior has its own
+    # explicit suite; this TEST-only override cannot enter production wiring.
+    def bypass_legacy_security(request: Request):
+        request.state.legacy_security_test_bypass = True
+
+    app.dependency_overrides[require_legacy_route_security] = bypass_legacy_security
+    app.dependency_overrides[resolve_legacy_tenant_id] = lambda: None
 
     with TestClient(app) as test_client:
         yield test_client

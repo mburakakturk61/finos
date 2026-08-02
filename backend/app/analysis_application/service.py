@@ -54,9 +54,19 @@ class AnalysisApplicationService:
         observability: ObservabilityPort, active_executions: ActiveExecutionPort,
         clock: ApplicationClockPort, scope_claims: RunScopeClaimPort,
         persistence: RunPersistencePort, reads: AnalysisReadPort,
+        authorization_revalidation: object | None = None,
         executor: Executor = run_orchestration,
     ) -> None:
+        if (
+            getattr(authorization, "requires_same_revalidation_instance", False)
+            and authorization_revalidation is not authorization
+        ):
+            raise ValueError("The production authorization adapter must own revalidation.")
         self.authorization = authorization
+        # Transitional None preserves the frozen 5.0C composition until the
+        # request-bound provider is wired in Step 12. Step 11 production
+        # composition passes the same LocalAuthorizationPolicyClient instance.
+        self.authorization_revalidation = authorization_revalidation
         self.security_audit = security_audit
         self.observability = observability
         self.active_executions = active_executions
@@ -166,7 +176,7 @@ class AnalysisApplicationService:
             except Exception:
                 return self._failure(AnalysisErrorCode.PERSISTENCE_INTEGRITY_ERROR, command.correlation_id)
 
-            revalidation = self._authorize(authorize_method, command)
+            revalidation = self._revalidate(command, authorize_method)
             if isinstance(revalidation, AnalysisErrorCode):
                 if not self._audit(command, ApplicationEventType.AUTHORIZATION_DENIED, digest, revalidation.value):
                     return self._failure(AnalysisErrorCode.SECURITY_AUDIT_FAILED, command.correlation_id)
@@ -176,6 +186,17 @@ class AnalysisApplicationService:
             if not revalidation.granted:
                 code = AnalysisErrorCode.AUTHORIZATION_REVOKED if revalidation.revoked else AnalysisErrorCode.UNAUTHORIZED
                 return self._failure(code, command.correlation_id)
+            if command.scope.previous_run_id is not None and self.authorization_revalidation is not None:
+                source_revalidation = self._revalidate_source(command)
+                if isinstance(source_revalidation, AnalysisErrorCode):
+                    if not self._audit(command, ApplicationEventType.AUTHORIZATION_DENIED, digest, source_revalidation.value):
+                        return self._failure(AnalysisErrorCode.SECURITY_AUDIT_FAILED, command.correlation_id)
+                    return self._failure(source_revalidation, command.correlation_id)
+                if not self._audit_authorization(command, source_revalidation, digest):
+                    return self._failure(AnalysisErrorCode.SECURITY_AUDIT_FAILED, command.correlation_id)
+                if not source_revalidation.granted:
+                    code = AnalysisErrorCode.AUTHORIZATION_REVOKED if source_revalidation.revoked else AnalysisErrorCode.UNAUTHORIZED
+                    return self._failure(code, command.correlation_id)
             try:
                 verified = self.scope_claims.verify(command.run_id, command.scope, claim.claim_token, claim.version)
             except Exception:
@@ -307,6 +328,31 @@ class AnalysisApplicationService:
     def _authorize_source(self, command):
         try:
             return self.authorization.authorize_resume_source(
+                command.scope.previous_run_id, command.scope, command.audit_context,
+            )
+        except Exception:
+            return AnalysisErrorCode.AUTHORIZATION_PROVIDER_UNAVAILABLE
+
+    def _revalidate(self, command, legacy_method):
+        adapter = self.authorization_revalidation
+        if adapter is None:
+            return self._authorize(legacy_method, command)
+        method = (
+            adapter.revalidate_start if isinstance(command, StartAnalysisCommand)
+            else adapter.revalidate_resume if isinstance(command, ResumeAnalysisCommand)
+            else adapter.revalidate_retry
+        )
+        try:
+            return method(command.scope, command.audit_context)
+        except Exception:
+            return AnalysisErrorCode.AUTHORIZATION_PROVIDER_UNAVAILABLE
+
+    def _revalidate_source(self, command):
+        adapter = self.authorization_revalidation
+        if adapter is None:
+            return self._authorize_source(command)
+        try:
+            return adapter.revalidate_resume_source(
                 command.scope.previous_run_id, command.scope, command.audit_context,
             )
         except Exception:

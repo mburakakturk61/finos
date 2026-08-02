@@ -231,6 +231,7 @@ def _resolve_existing_period_id_readonly(
     db: Session,
     company_resolution: dict[str, Any] | None,
     period_resolution: dict[str, Any] | None,
+    tenant_id: uuid.UUID | None,
 ) -> uuid.UUID | None:
     """
     Milestone 4.2 hotfix: FAZ 1 (yalnızca-okuma) sırasında, `period.mode
@@ -258,9 +259,17 @@ def _resolve_existing_period_id_readonly(
 
     if period_resolution.get("mode") == "existing":
         try:
-            return uuid.UUID(str(period_resolution["id"]))
+            period_id = uuid.UUID(str(period_resolution["id"]))
         except (TypeError, ValueError, KeyError):
             return None
+        query = (
+            select(FinancialPeriod.id)
+            .join(Company, FinancialPeriod.company_id == Company.id)
+            .where(FinancialPeriod.id == period_id)
+        )
+        if tenant_id is not None:
+            query = query.where(Company.tenant_id == tenant_id)
+        return db.scalars(query).first()
 
     if company_resolution.get("mode") == "existing":
         try:
@@ -271,9 +280,10 @@ def _resolve_existing_period_id_readonly(
         tax_number = company_resolution.get("tax_number")
         if not tax_number:
             return None
-        existing_company = db.scalars(
-            select(Company).where(Company.tax_number == tax_number)
-        ).first()
+        company_query = select(Company).where(Company.tax_number == tax_number)
+        if tenant_id is not None:
+            company_query = company_query.where(Company.tenant_id == tenant_id)
+        existing_company = db.scalars(company_query).first()
         if existing_company is None:
             return None
         company_id = existing_company.id
@@ -397,20 +407,27 @@ def _validate_batch(files: list[UploadedFileInput]) -> None:
         )
 
 
-def _find_document_checksum_match(db: Session, checksum: str) -> uuid.UUID | None:
-    return db.scalars(
+def _find_document_checksum_match(
+    db: Session, checksum: str, tenant_id: uuid.UUID | None
+) -> uuid.UUID | None:
+    query = (
         select(FinancialDocument.id)
+        .join(Company, FinancialDocument.company_id == Company.id)
         .where(FinancialDocument.checksum == checksum)
         .limit(1)
-    ).first()
+    )
+    if tenant_id is not None:
+        query = query.where(Company.tenant_id == tenant_id)
+    return db.scalars(query).first()
 
 
 def _find_completed_batch_item_checksum_match(
     db: Session,
     checksum: str,
     exclude_batch_id: uuid.UUID,
+    tenant_id: uuid.UUID | None,
 ) -> uuid.UUID | None:
-    return db.scalars(
+    query = (
         select(BulkUploadItem.id)
         .join(BulkUploadBatch, BulkUploadItem.batch_id == BulkUploadBatch.id)
         .where(
@@ -419,7 +436,10 @@ def _find_completed_batch_item_checksum_match(
             BulkUploadItem.batch_id != exclude_batch_id,
         )
         .limit(1)
-    ).first()
+    )
+    if tenant_id is not None:
+        query = query.where(BulkUploadBatch.tenant_id == tenant_id)
+    return db.scalars(query).first()
 
 
 def _determine_classification_status(
@@ -433,6 +453,7 @@ def _determine_classification_status(
     period_confidence: Decimal,
     confidence_score: Decimal,
     warnings: list[dict[str, Any]],
+    tenant_id: uuid.UUID | None,
 ) -> ClassificationStatus:
     if first_occurrence_id is not None:
         add_warning(
@@ -449,12 +470,12 @@ def _determine_classification_status(
     source_label: str | None = None
     source_id: uuid.UUID | None = None
 
-    document_match_id = _find_document_checksum_match(db, checksum)
+    document_match_id = _find_document_checksum_match(db, checksum, tenant_id)
     if document_match_id is not None:
         source_label, source_id = "financial_document", document_match_id
     else:
         item_match_id = _find_completed_batch_item_checksum_match(
-            db, checksum, batch_id
+            db, checksum, batch_id, tenant_id
         )
         if item_match_id is not None:
             source_label, source_id = "bulk_upload_item", item_match_id
@@ -533,6 +554,7 @@ def _derive_period_dates(
 def _auto_fill_resolution(
     db: Session,
     *,
+    tenant_id: uuid.UUID | None,
     detected_document_type: DetectedDocumentType,
     detected_company_name: str | None,
     detected_tax_number: str | None,
@@ -560,9 +582,12 @@ def _auto_fill_resolution(
         # (confidence_score bileşenlerin min()'i) -- yine de savunmacı.
         return None
 
-    existing_company = db.scalars(
-        select(Company).where(Company.tax_number == detected_tax_number).limit(1)
-    ).first()
+    company_query = select(Company).where(
+        Company.tax_number == detected_tax_number
+    ).limit(1)
+    if tenant_id is not None:
+        company_query = company_query.where(Company.tenant_id == tenant_id)
+    existing_company = db.scalars(company_query).first()
 
     if existing_company is not None:
         company_resolution: dict[str, Any] = {
@@ -616,6 +641,7 @@ def _auto_fill_resolution(
 def _build_item(
     db: Session,
     batch_id: uuid.UUID,
+    tenant_id: uuid.UUID | None,
     file_input: UploadedFileInput,
     seen_checksums: dict[str, uuid.UUID],
 ) -> BulkUploadItem:
@@ -708,12 +734,14 @@ def _build_item(
         period_confidence=period_confidence,
         confidence_score=confidence_score,
         warnings=warnings,
+        tenant_id=tenant_id,
     )
 
     resolution_json: dict[str, Any] | None = None
     if classification_status == ClassificationStatus.AUTO_MATCHED:
         resolution_json = _auto_fill_resolution(
             db,
+            tenant_id=tenant_id,
             detected_document_type=document_type,
             detected_company_name=company_name,
             detected_tax_number=tax_number,
@@ -771,12 +799,15 @@ def _mark_batch_failed(db: Session, batch_id: uuid.UUID) -> None:
 def handle_bulk_upload(
     db: Session,
     files: list[UploadedFileInput],
+    *,
+    tenant_id: uuid.UUID | None = None,
 ) -> BulkUploadBatch:
     _validate_batch(files)
 
     batch_id = uuid.uuid4()
     batch = BulkUploadBatch(
         id=batch_id,
+        tenant_id=tenant_id,
         status=BatchStatus.PROCESSING,
         total_file_count=len(files),
         classified_file_count=0,
@@ -794,7 +825,7 @@ def handle_bulk_upload(
 
     try:
         for file_input in files:
-            item = _build_item(db, batch_id, file_input, seen_checksums)
+            item = _build_item(db, batch_id, tenant_id, file_input, seen_checksums)
             db.add(item)
             items.append(item)
     except Exception as error:
@@ -886,7 +917,9 @@ def _get_item_or_404(
     return item
 
 
-def _validate_company_resolution(db: Session, company: dict[str, Any]) -> None:
+def _validate_company_resolution(
+    db: Session, company: dict[str, Any], tenant_id: uuid.UUID | None
+) -> None:
     mode = company.get("mode")
     if mode == "existing":
         raw_id = company.get("id")
@@ -896,7 +929,10 @@ def _validate_company_resolution(db: Session, company: dict[str, Any]) -> None:
             raise ItemPatchValidationError(
                 "company.id geçerli bir UUID olmalıdır."
             ) from error
-        if db.get(Company, company_id) is None:
+        company_query = select(Company.id).where(Company.id == company_id)
+        if tenant_id is not None:
+            company_query = company_query.where(Company.tenant_id == tenant_id)
+        if db.scalars(company_query).first() is None:
             raise ItemPatchValidationError(
                 f"company_id bulunamadı: {company_id}"
             )
@@ -911,7 +947,9 @@ def _validate_company_resolution(db: Session, company: dict[str, Any]) -> None:
         )
 
 
-def _validate_period_resolution(db: Session, period: dict[str, Any]) -> None:
+def _validate_period_resolution(
+    db: Session, period: dict[str, Any], tenant_id: uuid.UUID | None
+) -> None:
     mode = period.get("mode")
     if mode == "existing":
         raw_id = period.get("id")
@@ -921,7 +959,14 @@ def _validate_period_resolution(db: Session, period: dict[str, Any]) -> None:
             raise ItemPatchValidationError(
                 "period.id geçerli bir UUID olmalıdır."
             ) from error
-        if db.get(FinancialPeriod, period_id) is None:
+        period_query = (
+            select(FinancialPeriod.id)
+            .join(Company, FinancialPeriod.company_id == Company.id)
+            .where(FinancialPeriod.id == period_id)
+        )
+        if tenant_id is not None:
+            period_query = period_query.where(Company.tenant_id == tenant_id)
+        if db.scalars(period_query).first() is None:
             raise ItemPatchValidationError(f"period_id bulunamadı: {period_id}")
     elif mode == "new":
         required_fields = (
@@ -986,10 +1031,10 @@ def patch_bulk_upload_item(
     resolution: dict[str, Any] = dict(item.resolution_json or {})
 
     if company is not None:
-        _validate_company_resolution(db, company)
+        _validate_company_resolution(db, company, batch.tenant_id)
         resolution["company"] = company
     if period is not None:
-        _validate_period_resolution(db, period)
+        _validate_period_resolution(db, period, batch.tenant_id)
         resolution["period"] = period
     if document_type is not None:
         if document_type == DetectedDocumentType.UNKNOWN.value:
@@ -1161,7 +1206,7 @@ def _run_confirm_preflight(
             })
         else:
             try:
-                _validate_company_resolution(db, company_resolution)
+                _validate_company_resolution(db, company_resolution, batch.tenant_id)
             except ItemPatchValidationError as error:
                 errors.append({
                     "item_id": item.id, "code": "COMPANY_UNRESOLVED",
@@ -1175,7 +1220,7 @@ def _run_confirm_preflight(
             })
         else:
             try:
-                _validate_period_resolution(db, period_resolution)
+                _validate_period_resolution(db, period_resolution, batch.tenant_id)
             except ItemPatchValidationError as error:
                 errors.append({
                     "item_id": item.id, "code": "PERIOD_UNRESOLVED",
@@ -1268,7 +1313,7 @@ def _run_confirm_preflight(
             # önceden var olan trial_balance'ı bulabilmesi için AYRI, salt-
             # okunur bir çözümleme kullanılır (mode'dan bağımsız).
             resolved_period_id = _resolve_existing_period_id_readonly(
-                db, company_resolution, period_resolution
+                db, company_resolution, period_resolution, batch.tenant_id
             )
             if resolved_period_id is not None:
                 found = _find_existing_completed_trial_balance_result(db, resolved_period_id)
@@ -1431,6 +1476,7 @@ def _run_confirm_analyses(
 def _find_or_create_company(
     db: Session,
     resolution: dict[str, Any],
+    tenant_id: uuid.UUID | None,
 ) -> tuple[Company, bool]:
     """Döner: (company, created). VKN eşleşen mevcut bir Company varsa
     HER ZAMAN o reuse edilir -- mode='new' olsa bile (FAZ 1 ile FAZ 3
@@ -1439,16 +1485,25 @@ def _find_or_create_company(
     IntegrityError'ı da önler)."""
 
     if resolution["mode"] == "existing":
-        company = db.get(Company, uuid.UUID(str(resolution["id"])))
+        company_query = select(Company).where(
+            Company.id == uuid.UUID(str(resolution["id"]))
+        )
+        if tenant_id is not None:
+            company_query = company_query.where(Company.tenant_id == tenant_id)
+        company = db.scalars(company_query).one()
         return company, False
 
-    existing = db.scalars(
-        select(Company).where(Company.tax_number == resolution["tax_number"])
-    ).first()
+    company_query = select(Company).where(
+        Company.tax_number == resolution["tax_number"]
+    )
+    if tenant_id is not None:
+        company_query = company_query.where(Company.tenant_id == tenant_id)
+    existing = db.scalars(company_query).first()
     if existing is not None:
         return existing, False
 
     company = Company(
+        tenant_id=tenant_id,
         legal_name=resolution["legal_name"],
         trade_name=resolution.get("trade_name"),
         tax_number=resolution["tax_number"],
@@ -1505,6 +1560,7 @@ def _find_or_create_period(
 def _write_confirmed_records(
     db: Session,
     batch_id: uuid.UUID,
+    tenant_id: uuid.UUID | None,
     plans: list[AcceptedItemPlan],
     analysis_results: dict[uuid.UUID, EngineRunResult],
 ) -> ConfirmSummary:
@@ -1545,7 +1601,9 @@ def _write_confirmed_records(
 
     try:
         for plan in ordered_plans:
-            company, company_created = _find_or_create_company(db, plan.company_resolution)
+            company, company_created = _find_or_create_company(
+                db, plan.company_resolution, tenant_id
+            )
             counts["created_company_count" if company_created else "reused_company_count"] += 1
 
             period, period_created = _find_or_create_period(
@@ -1704,6 +1762,7 @@ def confirm_bulk_upload(
         .select_from(BulkUploadItem)
         .where(BulkUploadItem.batch_id == batch_id)
     ) or 0
+    tenant_id = batch.tenant_id
 
     # --- FAZ 1 ---
     plans = _run_confirm_preflight(db, batch, resubmitted_files)
@@ -1720,7 +1779,9 @@ def confirm_bulk_upload(
     analysis_results = _run_confirm_analyses(plans, resubmitted_files)
 
     # --- FAZ 3 ---
-    summary = _write_confirmed_records(db, batch_id, plans, analysis_results)
+    summary = _write_confirmed_records(
+        db, batch_id, tenant_id, plans, analysis_results
+    )
 
     summary.counts["ignored_item_count"] = total_item_count - len(plans)
     return summary

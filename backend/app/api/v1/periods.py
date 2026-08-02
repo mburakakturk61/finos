@@ -14,13 +14,20 @@ from app.schemas.financial_period import (
     FinancialPeriodRead,
 )
 from app.schemas.pagination import Page
+from app.integrations.analysis_http.legacy_security import require_legacy_route_security, resolve_legacy_tenant_id
 
 
-router = APIRouter(prefix="/api/v1", tags=["periods"])
+router = APIRouter(
+    prefix="/api/v1", tags=["periods"],
+    dependencies=[Depends(require_legacy_route_security)],
+)
 
 
-def _get_company_or_404(company_id: uuid.UUID, db: Session) -> Company:
-    company = db.get(Company, company_id)
+def _get_company_or_404(company_id: uuid.UUID, db: Session, tenant_id: uuid.UUID | None) -> Company:
+    query = select(Company).where(Company.id == company_id)
+    if tenant_id is not None:
+        query = query.where(Company.tenant_id == tenant_id)
+    company = db.scalar(query)
 
     if company is None:
         raise HTTPException(
@@ -40,8 +47,9 @@ def create_period(
     company_id: uuid.UUID,
     payload: FinancialPeriodCreate,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> FinancialPeriod:
-    _get_company_or_404(company_id, db)
+    _get_company_or_404(company_id, db, tenant_id)
 
     period = FinancialPeriod(
         company_id=company_id,
@@ -72,10 +80,11 @@ def create_period(
 def list_periods(
     company_id: uuid.UUID,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
 ) -> Page[FinancialPeriodRead]:
-    _get_company_or_404(company_id, db)
+    _get_company_or_404(company_id, db, tenant_id)
 
     settings = get_settings()
     effective_limit = min(
@@ -115,8 +124,12 @@ def list_periods(
 def get_period(
     period_id: uuid.UUID,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> FinancialPeriod:
-    period = db.get(FinancialPeriod, period_id)
+    query = select(FinancialPeriod).join(Company).where(FinancialPeriod.id == period_id)
+    if tenant_id is not None:
+        query = query.where(Company.tenant_id == tenant_id)
+    period = db.scalar(query)
 
     if period is None:
         raise HTTPException(

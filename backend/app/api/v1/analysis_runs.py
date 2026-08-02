@@ -8,6 +8,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.analysis_application.contracts import (
@@ -32,6 +33,16 @@ from app.integrations.analysis_http.mapping import (
     resolve_inputs, to_wire,
 )
 from app.integrations.analysis_http.security import validate_authentication_context
+from app.integrations.analysis_http.router_security import (
+    RouterAuthenticationError,
+    RouterAuthenticationErrorCode,
+)
+from app.security.authorization_adapter import AuthorizationCheckpoint
+from app.security.authorization_policy import PolicyScopeType
+from app.security.request_authentication import (
+    RequestAuthorizationPlan,
+    RequestAuthorizationTarget,
+)
 from app.schemas.analysis_runs_v1 import (
     AnalysisCommandResponseV1, AnalysisExecutionResponseV1,
     AnalysisHistoryPageResponseV1, AnalysisResultResponseV1,
@@ -41,7 +52,11 @@ from app.schemas.analysis_runs_v1 import (
 )
 
 
-router = APIRouter(prefix="/api/v1/analysis-runs", tags=["analysis-runs"])
+_bearer_schema = HTTPBearer(auto_error=False, scheme_name="BearerAuth")
+router = APIRouter(
+    prefix="/api/v1/analysis-runs", tags=["analysis-runs"],
+    dependencies=[Depends(_bearer_schema)],
+)
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _RAW_IDENTITY_HEADERS = frozenset({"x-user-id", "x-tenant-id", "x-subject-id"})
 
@@ -74,6 +89,34 @@ def _headers(request, correlation_id, api_version, idempotency_key=None):
 
 def _authenticate(request, runtime, correlation_id):
     _headers(request, correlation_id, request.headers.get("x-api-contract-version", ""))
+    factory = getattr(runtime, "request_authentication_factory", None)
+    if factory is not None or callable(getattr(runtime, "authenticate_request", None)) and not hasattr(runtime.authentication_context_provider, "context"):
+        try:
+            provider = runtime.authenticate_request(
+                authorization_headers=tuple(request.headers.getlist("authorization")),
+                correlation_id=correlation_id,
+                request_id=request.headers.get("x-request-id", correlation_id),
+            )
+            context = provider.current_context()
+        except RouterAuthenticationError as exc:
+            if exc.code is RouterAuthenticationErrorCode.UNAVAILABLE:
+                raise ApiBoundaryError(
+                    "AUTHENTICATION_PROVIDER_UNAVAILABLE", 503,
+                    "Authentication is temporarily unavailable.", correlation_id, True,
+                ) from exc
+            code = "AUTHENTICATION_REQUIRED" if exc.code is RouterAuthenticationErrorCode.MISSING else "INVALID_TOKEN"
+            raise ApiBoundaryError(code, 401, "Trusted authentication is required.", correlation_id) from exc
+        try:
+            validated = validate_authentication_context(
+                context, correlation_id=correlation_id,
+                trusted_issuers=runtime.trusted_issuers,
+                now=runtime.clock.now_audit_time(),
+            )
+        except AuthenticationContextError as exc:
+            raise ApiBoundaryError(
+                "INVALID_TOKEN", 401, "Trusted authentication is required.", correlation_id,
+            ) from exc
+        return validated, provider
     try:
         context = runtime.authentication_context_provider.current_context()
     except AuthenticationProviderUnavailable as exc:
@@ -90,7 +133,7 @@ def _authenticate(request, runtime, correlation_id):
             context, correlation_id=correlation_id,
             trusted_issuers=runtime.trusted_issuers,
             now=runtime.clock.now_audit_time(),
-        )
+        ), None
     except AuthenticationContextError as exc:
         raise ApiBoundaryError(
             "AUTHENTICATION_REQUIRED", 401, "Trusted authentication is required.", correlation_id,
@@ -174,6 +217,60 @@ def _input_error(error, correlation_id):
     return ApiBoundaryError(error.code.value, status, message, correlation_id, retryable)
 
 
+def _security_error(decision, correlation_id):
+    code = decision.decision_code
+    if code in {
+        "AUTHZ_CONTEXT_MISSING", "AUTHZ_CONTEXT_INVALID", "AUTHZ_CONTEXT_STALE",
+        "AUTHZ_CONTEXT_EXPIRED", "AUTHZ_CONTEXT_SUBJECT_MISMATCH",
+    }:
+        return ApiBoundaryError("INVALID_TOKEN", 401, "Trusted authentication is required.", correlation_id)
+    if code in {
+        "AUTHZ_PROVIDER_UNAVAILABLE", "AUTHZ_PROVIDER_TIMEOUT",
+        "AUDIT_REQUIRED_BUT_UNAVAILABLE", "AUTHZ_AUDIT_INTEGRITY_FAILURE",
+    }:
+        return ApiBoundaryError(
+            "AUTHORIZATION_PROVIDER_UNAVAILABLE", 503,
+            "Authorization is temporarily unavailable.", correlation_id, True,
+        )
+    if code in {"AUTHZ_RESOURCE_NOT_FOUND", "AUTHZ_RESOURCE_STATE_INVALID"}:
+        return ApiBoundaryError("NOT_FOUND", 404, "The analysis resource was not found.", correlation_id)
+    return ApiBoundaryError("UNAUTHORIZED", 403, "The analysis request is not authorized.", correlation_id)
+
+
+def _plan(*targets):
+    order = {value: index for index, value in enumerate(AuthorizationCheckpoint)}
+    return RequestAuthorizationPlan(tuple(sorted(targets, key=lambda item: order[item.checkpoint])))
+
+
+def _cp_target(checkpoint, scope):
+    return RequestAuthorizationTarget(
+        checkpoint, PolicyScopeType.COMPANY_PERIOD,
+        f"cp1:{scope.company_id}:{scope.financial_period_id}", scope.tenant_id,
+        scope.company_id, scope.financial_period_id,
+    )
+
+
+def _run_target(checkpoint, run_id, tenant_id):
+    return RequestAuthorizationTarget(
+        checkpoint, PolicyScopeType.ANALYSIS_RUN, run_id, tenant_id,
+    )
+
+
+def _bind_security(runtime, authentication_provider, authorization_plan):
+    if authentication_provider is None:
+        return runtime.authorization
+    return runtime.bind_request_security(
+        authentication_provider=authentication_provider,
+        authorization_plan=authorization_plan,
+    )
+
+
+def _require_decision(decision, correlation_id):
+    if not decision.granted:
+        raise _security_error(decision, correlation_id)
+    return decision
+
+
 def _json(model, status, correlation_id, *, retry_after=None):
     headers = {
         "X-Correlation-ID": correlation_id, "X-API-Contract-Version": "1.0.0",
@@ -189,7 +286,13 @@ def boundary_error_response(error: ApiBoundaryError):
         success=False, data=None, error=ApiErrorV1(**boundary_error_dict(error)),
         warnings=(), correlation_id=error.correlation_id,
     )
-    return _json(model, error.status_code, error.correlation_id, retry_after=error.retry_after)
+    response = _json(model, error.status_code, error.correlation_id, retry_after=error.retry_after)
+    if error.status_code == 401:
+        response.headers["WWW-Authenticate"] = (
+            'Bearer realm="api"' if error.code == "AUTHENTICATION_REQUIRED"
+            else 'Bearer realm="api", error="invalid_token"'
+        )
+    return response
 
 
 def _json_outcome(outcome, *, data_model, success_status=200):
@@ -231,7 +334,34 @@ def _json_outcome(outcome, *, data_model, success_status=200):
 
 def _execute_write(http_request, body, run_id, correlation_id, operation, original, previous, db, runtime):
     _headers(http_request, correlation_id, http_request.headers.get("x-api-contract-version", ""), run_id)
-    authentication = _authenticate(http_request, runtime, correlation_id)
+    authentication, authentication_provider = _authenticate(http_request, runtime, correlation_id)
+    requested_scope = application_scope(
+        request=body, authentication=authentication, operation_kind=operation,
+        original_operation=original, previous_run_id=previous,
+    )
+    targets = [
+        _cp_target({
+            ApplicationOperationKind.START: AuthorizationCheckpoint.START,
+            ApplicationOperationKind.RESUME: AuthorizationCheckpoint.RESUME,
+            ApplicationOperationKind.RETRY: AuthorizationCheckpoint.RETRY,
+        }[operation], requested_scope),
+        _cp_target({
+            ApplicationOperationKind.START: AuthorizationCheckpoint.PRE_PERSIST_START,
+            ApplicationOperationKind.RESUME: AuthorizationCheckpoint.PRE_PERSIST_RESUME,
+            ApplicationOperationKind.RETRY: AuthorizationCheckpoint.PRE_PERSIST_RETRY,
+        }[operation], requested_scope),
+    ]
+    if previous is not None:
+        targets.extend((
+            _run_target(AuthorizationCheckpoint.RESUME_SOURCE, previous, authentication.tenant_id),
+            _run_target(AuthorizationCheckpoint.PRE_PERSIST_RESUME_SOURCE, previous, authentication.tenant_id),
+        ))
+    security = _bind_security(runtime, authentication_provider, _plan(*targets))
+    actor_id = getattr(security, "actor_reference", authentication.subject_id)
+    actor = audit_context(
+        request=body, authentication=authentication,
+        client_request_id=run_id, actor_id=actor_id,
+    )
     _scope_preflight(
         runtime, run_id=run_id, body=body, authentication=authentication,
         operation=operation, original=original, previous=previous,
@@ -246,10 +376,22 @@ def _execute_write(http_request, body, run_id, correlation_id, operation, origin
             correlation_id, True, retry_after=runtime.admission.retry_after_seconds,
         )
     try:
-        _authorize_source_resolution(
-            runtime, body=body, authentication=authentication,
-            operation=operation, original=original, previous=previous, run_id=run_id,
-        )
+        initial = {
+            ApplicationOperationKind.START: security.authorize_start,
+            ApplicationOperationKind.RESUME: security.authorize_resume,
+            ApplicationOperationKind.RETRY: security.authorize_retry,
+        }[operation](requested_scope, actor)
+        _require_decision(initial, correlation_id)
+        if previous is not None:
+            _require_decision(
+                security.authorize_resume_source(previous, requested_scope, actor),
+                correlation_id,
+            )
+        if authentication_provider is None:
+            _authorize_source_resolution(
+                runtime, body=body, authentication=authentication,
+                operation=operation, original=original, previous=previous, run_id=run_id,
+            )
         try:
             inputs = resolve_inputs(
                 request=body, authentication=authentication,
@@ -263,13 +405,20 @@ def _execute_write(http_request, body, run_id, correlation_id, operation, origin
                 request=body, run_id=run_id, correlation_id=correlation_id,
                 authentication=authentication, operation_kind=operation,
                 original_operation=original, previous_run_id=previous,
-                resolved_inputs=inputs,
+                resolved_inputs=inputs, actor_id=actor_id,
             )
         except (TypeError, ValueError) as exc:
             raise ApiBoundaryError(
                 "INVALID_COMMAND", 422, "The analysis command is invalid.", correlation_id,
             ) from exc
-        service = runtime.application_service(session=db, subject_id=authentication.subject_id)
+        service = (
+            runtime.application_service(session=db, subject_id=authentication.subject_id)
+            if authentication_provider is None else
+            runtime.application_service(
+                session=db, subject_id=authentication.subject_id,
+                authorization=security,
+            )
+        )
         method = {
             ApplicationOperationKind.START: service.start,
             ApplicationOperationKind.RESUME: service.resume,
@@ -324,16 +473,29 @@ def _read_scope(runtime, *, run_id, company_id, period_id, authentication, corre
 
 @router.post("/{run_id}/cancel", operation_id="cancel_analysis_run_v1")
 def cancel_analysis_run(run_id: str, request: Request, company_id: str = Query(), financial_period_id: str = Query(), correlation_id: str = Header(alias="X-Correlation-ID"), db: Session = Depends(get_db), runtime=Depends(require_analysis_runtime)):
-    authentication = _authenticate(request, runtime, correlation_id)
+    authentication, authentication_provider = _authenticate(request, runtime, correlation_id)
     try:
-        scope = _read_scope(runtime, run_id=run_id, company_id=uuid.UUID(company_id), period_id=uuid.UUID(financial_period_id), authentication=authentication, correlation_id=correlation_id)
+        company_uuid, period_uuid = uuid.UUID(company_id), uuid.UUID(financial_period_id)
     except ValueError as exc:
         raise ApiBoundaryError("INVALID_QUERY", 422, "The analysis query is invalid.", correlation_id) from exc
-    command = build_cancel_command(run_id=run_id, correlation_id=correlation_id, generated_at=runtime.clock.now_audit_time(), scope=scope, authentication=authentication)
+    claimed_scope = ApplicationScopeDTO(company_uuid, period_uuid, authentication.tenant_id, ApplicationOperationKind.START, ApplicationOriginalOperation.START)
+    security = _bind_security(runtime, authentication_provider, _plan(
+        _run_target(AuthorizationCheckpoint.CANCEL, run_id, authentication.tenant_id)
+    ))
+    actor_id = getattr(security, "actor_reference", authentication.subject_id)
+    claimed_command = build_cancel_command(run_id=run_id, correlation_id=correlation_id, generated_at=runtime.clock.now_audit_time(), scope=claimed_scope, authentication=authentication, actor_id=actor_id)
+    decision = _require_decision(security.authorize_cancel(claimed_scope, claimed_command.audit_context), correlation_id)
+    scope = _read_scope(runtime, run_id=run_id, company_id=company_uuid, period_id=period_uuid, authentication=authentication, correlation_id=correlation_id)
+    command = build_cancel_command(run_id=run_id, correlation_id=correlation_id, generated_at=runtime.clock.now_audit_time(), scope=scope, authentication=authentication, actor_id=actor_id)
+    if authentication_provider is not None:
+        security.cache_cancel_guard(scope, command.audit_context, decision)
     try:
-        outcome = runtime.application_service(
-            session=db, subject_id=authentication.subject_id
-        ).cancel(command)
+        service = (
+            runtime.application_service(session=db, subject_id=authentication.subject_id)
+            if authentication_provider is None else
+            runtime.application_service(session=db, subject_id=authentication.subject_id, authorization=security)
+        )
+        outcome = service.cancel(command)
     except Exception as exc:
         raise ApiBoundaryError(
             "INTERNAL_INVARIANT_BREACH", 500,
@@ -343,13 +505,29 @@ def cancel_analysis_run(run_id: str, request: Request, company_id: str = Query()
 
 
 def _run_read(kind, *, run_id, request, company_id, period_id, include_payload, engine_code, correlation_id, db, runtime):
-    authentication = _authenticate(request, runtime, correlation_id)
+    authentication, authentication_provider = _authenticate(request, runtime, correlation_id)
     try:
-        scope = _read_scope(runtime, run_id=run_id, company_id=uuid.UUID(str(company_id)), period_id=uuid.UUID(str(period_id)), authentication=authentication, correlation_id=correlation_id)
+        company_uuid, period_uuid = uuid.UUID(str(company_id)), uuid.UUID(str(period_id))
     except ValueError as exc:
         raise ApiBoundaryError("INVALID_QUERY", 422, "The analysis query is invalid.", correlation_id) from exc
-    query = build_run_query(kind=kind, run_id=run_id, correlation_id=correlation_id, generated_at=runtime.clock.now_audit_time(), scope=scope, authentication=authentication, include_payload=include_payload, engine_code=engine_code)
-    facade = runtime.read_facade(session=db)
+    claimed_scope = ApplicationScopeDTO(company_uuid, period_uuid, authentication.tenant_id, ApplicationOperationKind.START, ApplicationOriginalOperation.START)
+    security = _bind_security(runtime, authentication_provider, _plan(
+        _run_target(AuthorizationCheckpoint.READ, run_id, authentication.tenant_id)
+    ))
+    actor_id = getattr(security, "actor_reference", authentication.subject_id)
+    claimed_query = build_run_query(kind=kind, run_id=run_id, correlation_id=correlation_id, generated_at=runtime.clock.now_audit_time(), scope=claimed_scope, authentication=authentication, include_payload=include_payload, engine_code=engine_code, actor_id=actor_id)
+    generic = _require_decision(security.authorize_read(claimed_scope, claimed_query.audit_context, include_payload=include_payload), correlation_id)
+    endpoint_action = {
+        "status": "analysis.status.read",
+        "result": "analysis.result.payload.read" if include_payload else "analysis.result.read",
+        "execution": "analysis.execution.payload.read" if include_payload else "analysis.execution.read",
+    }[kind]
+    endpoint = _require_decision(security.authorize_endpoint(endpoint_action, claimed_scope, claimed_query.audit_context), correlation_id) if authentication_provider is not None else generic
+    scope = _read_scope(runtime, run_id=run_id, company_id=company_uuid, period_id=period_uuid, authentication=authentication, correlation_id=correlation_id)
+    query = build_run_query(kind=kind, run_id=run_id, correlation_id=correlation_id, generated_at=runtime.clock.now_audit_time(), scope=scope, authentication=authentication, include_payload=include_payload, engine_code=engine_code, actor_id=actor_id)
+    if authentication_provider is not None:
+        security.cache_read_guard(scope, query.audit_context, endpoint)
+    facade = runtime.read_facade(session=db) if authentication_provider is None else runtime.read_facade(session=db, authorization=security)
     outcome = {"status": facade.get_status, "result": facade.get_result, "execution": facade.get_execution_detail}[kind](query)
     model = {"status": AnalysisRunStatusResponseV1, "result": AnalysisResultResponseV1, "execution": AnalysisExecutionResponseV1}[kind]
     return _json_outcome(outcome, data_model=model)
@@ -372,7 +550,7 @@ def get_analysis_execution(run_id: str, engine_code: ApplicationEngineCode, requ
 
 @router.get("", operation_id="list_analysis_run_history_v1")
 def list_analysis_run_history(request: Request, company_id: str, financial_period_id: str, cursor: str | None = None, limit: int = Query(default=50, ge=1, le=200), correlation_id: str = Header(alias="X-Correlation-ID"), db: Session = Depends(get_db), runtime=Depends(require_analysis_runtime)):
-    authentication = _authenticate(request, runtime, correlation_id)
+    authentication, authentication_provider = _authenticate(request, runtime, correlation_id)
     try:
         company_uuid, period_uuid = uuid.UUID(company_id), uuid.UUID(financial_period_id)
     except ValueError as exc:
@@ -384,8 +562,15 @@ def list_analysis_run_history(request: Request, company_id: str, financial_perio
         except InvalidCursor as exc:
             raise ApiBoundaryError("INVALID_CURSOR", 422, "The pagination cursor is invalid.", correlation_id) from exc
     scope = ApplicationScopeDTO(company_uuid, period_uuid, authentication.tenant_id, ApplicationOperationKind.START, ApplicationOriginalOperation.START)
-    query = build_history_query(correlation_id=correlation_id, generated_at=runtime.clock.now_audit_time(), scope=scope, authentication=authentication, cursor=internal_cursor, limit=limit)
-    outcome = runtime.read_facade(session=db).list_history(query)
+    security = _bind_security(runtime, authentication_provider, _plan(
+        _cp_target(AuthorizationCheckpoint.READ, scope)
+    ))
+    actor_id = getattr(security, "actor_reference", authentication.subject_id)
+    query = build_history_query(correlation_id=correlation_id, generated_at=runtime.clock.now_audit_time(), scope=scope, authentication=authentication, cursor=internal_cursor, limit=limit, actor_id=actor_id)
+    if authentication_provider is not None:
+        endpoint = _require_decision(security.authorize_endpoint("analysis.history.read", scope, query.audit_context), correlation_id)
+        security.cache_read_guard(scope, query.audit_context, endpoint)
+    outcome = (runtime.read_facade(session=db) if authentication_provider is None else runtime.read_facade(session=db, authorization=security)).list_history(query)
     if outcome.success and outcome.value.next_cursor:
         encoded = runtime.cursor_codec.encode(internal_cursor=outcome.value.next_cursor, tenant_id=authentication.tenant_id, company_id=company_uuid, financial_period_id=period_uuid, now=runtime.clock.now_audit_time())
         outcome = dataclasses.replace(outcome, value=dataclasses.replace(outcome.value, next_cursor=encoded))

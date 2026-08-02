@@ -41,16 +41,18 @@ def application_scope(*, request, authentication, operation_kind, original_opera
     )
 
 
-def audit_context(*, request, authentication, client_request_id):
+def audit_context(*, request, authentication, client_request_id, actor_id=None):
+    attributes = {
+        "authentication_method": authentication.authentication_method,
+        "authentication_strength": authentication.authentication_strength.value,
+        "claims_version": authentication.claims_version,
+    }
+    if actor_id is None:
+        attributes["trusted_issuer"] = authentication.trusted_issuer
     return ApplicationAuditContextDTO(
-        authentication.subject_id, "authenticated_http_caller", "api_v1",
+        actor_id or authentication.subject_id, "authenticated_http_caller", "api_v1",
         request.purpose, client_request_id,
-        attributes={
-            "authentication_method": authentication.authentication_method,
-            "authentication_strength": authentication.authentication_strength.value,
-            "claims_version": authentication.claims_version,
-            "trusted_issuer": authentication.trusted_issuer,
-        },
+        attributes=attributes,
     )
 
 
@@ -110,7 +112,7 @@ def resolve_inputs(*, request, authentication, document_resolver, result_resolve
 
 def build_execution_command(
     *, request, run_id, correlation_id, authentication, operation_kind,
-    original_operation, previous_run_id, resolved_inputs,
+    original_operation, previous_run_id, resolved_inputs, actor_id=None,
 ):
     scope = application_scope(
         request=request, authentication=authentication,
@@ -144,6 +146,7 @@ def build_execution_command(
         scope=scope,
         audit_context=audit_context(
             request=request, authentication=authentication, client_request_id=run_id,
+            actor_id=actor_id,
         ),
         authorization_context_reference=authentication.authorization_context_reference,
         requested_outputs=request.requested_outputs, inputs=resolved_inputs,
@@ -163,9 +166,9 @@ def build_execution_command(
     return cls(**common)
 
 
-def build_cancel_command(*, run_id, correlation_id, generated_at, scope, authentication):
+def build_cancel_command(*, run_id, correlation_id, generated_at, scope, authentication, actor_id=None):
     actor = ApplicationAuditContextDTO(
-        authentication.subject_id, "authenticated_http_caller", "api_v1",
+        actor_id or authentication.subject_id, "authenticated_http_caller", "api_v1",
         "analysis.cancel", run_id,
     )
     return CancelAnalysisCommand(
@@ -174,9 +177,9 @@ def build_cancel_command(*, run_id, correlation_id, generated_at, scope, authent
     )
 
 
-def build_run_query(*, kind, run_id, correlation_id, generated_at, scope, authentication, include_payload=False, engine_code=None):
+def build_run_query(*, kind, run_id, correlation_id, generated_at, scope, authentication, include_payload=False, engine_code=None, actor_id=None):
     actor = ApplicationAuditContextDTO(
-        authentication.subject_id, "authenticated_http_caller", "api_v1",
+        actor_id or authentication.subject_id, "authenticated_http_caller", "api_v1",
         f"analysis.{kind}", correlation_id,
     )
     common = dict(
@@ -189,9 +192,9 @@ def build_run_query(*, kind, run_id, correlation_id, generated_at, scope, authen
     return GetExecutionDetailQuery(**common, engine_code=engine_code, include_payload=include_payload)
 
 
-def build_history_query(*, correlation_id, generated_at, scope, authentication, cursor, limit):
+def build_history_query(*, correlation_id, generated_at, scope, authentication, cursor, limit, actor_id=None):
     actor = ApplicationAuditContextDTO(
-        authentication.subject_id, "authenticated_http_caller", "api_v1",
+        actor_id or authentication.subject_id, "authenticated_http_caller", "api_v1",
         "analysis.history.read", correlation_id,
     )
     return ListAnalysisHistoryQuery(

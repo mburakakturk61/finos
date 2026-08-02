@@ -68,7 +68,9 @@ class AnalysisRunScopeClaim(Base):
     run_id: Mapped[str] = mapped_column(String(255), nullable=False)
     company_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     financial_period_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    tenant_id: Mapped[str | None] = mapped_column(String(255))
+    tenant_id: Mapped[str | None] = mapped_column(
+        String(63), ForeignKey("security_tenants.tenant_key", ondelete="RESTRICT")
+    )
     initiating_subject_id: Mapped[str | None] = mapped_column(String(255))
     operation_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     original_operation: Mapped[str] = mapped_column(String(16), nullable=False)

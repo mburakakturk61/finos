@@ -52,6 +52,19 @@ class Authorization:
     def authorize_read(self, scope, actor, *, include_payload): return self._decision("authorize_read")
 
 
+class Revalidation:
+    def __init__(self, decisions, events=None): self.decisions, self.events = list(decisions), events
+    def _decision(self, name):
+        if self.events is not None: self.events.append(name)
+        value = self.decisions.pop(0) if self.decisions else True
+        if isinstance(value, Exception): raise value
+        return AuthorizationDecision(bool(value) and value != "revoked", value == "revoked", str(value), "ref", NOW)
+    def revalidate_start(self, scope, actor): return self._decision("revalidate_start")
+    def revalidate_resume(self, scope, actor): return self._decision("revalidate_resume")
+    def revalidate_retry(self, scope, actor): return self._decision("revalidate_retry")
+    def revalidate_resume_source(self, source_run_id, target_scope, actor): return self._decision("revalidate_source")
+
+
 class Audit:
     def __init__(self, fail_event=None, events=None): self.fail_event, self.events = fail_event, events
     def record_required_event(self, event):
@@ -162,7 +175,7 @@ def _executor(counter):
     return execute
 
 
-def _service(state=None, *, authorization=None, audit=None, active=None, executor=None, events=None):
+def _service(state=None, *, authorization=None, revalidation=None, audit=None, active=None, executor=None, events=None):
     state = state or {"lock": threading.Lock()}
     reads = Reads(state)
     service = AnalysisApplicationService(
@@ -170,6 +183,7 @@ def _service(state=None, *, authorization=None, audit=None, active=None, executo
         observability=Observability(), active_executions=active or LocalActiveExecutionRegistry(),
         clock=Clock(), scope_claims=state.setdefault("claims", Claims()),
         persistence=Persistence(state, events), reads=reads, executor=executor or _executor([]),
+        authorization_revalidation=revalidation,
     )
     return service, reads
 
@@ -193,6 +207,33 @@ def test_pre_persistence_authorization_revocation_is_fail_closed():
     outcome = service.start(_command())
     assert outcome.error.code is AnalysisErrorCode.AUTHORIZATION_REVOKED
     assert "persisted" not in state
+
+
+def test_explicit_step11_revalidation_port_blocks_persistence_without_reusing_initial_decision():
+    events = []
+    state = {"lock": threading.Lock()}
+    service, _ = _service(
+        state,
+        authorization=Authorization([True], events),
+        revalidation=Revalidation(["revoked"], events),
+        events=events,
+    )
+    outcome = service.start(_command())
+    assert outcome.error.code is AnalysisErrorCode.AUTHORIZATION_REVOKED
+    assert "persisted" not in state
+    assert events.index("authorize_start") < events.index("revalidate_start")
+
+
+def test_explicit_step11_final_allow_persists_exactly_once():
+    state = {"lock": threading.Lock()}
+    service, _ = _service(
+        state,
+        authorization=Authorization([True]),
+        revalidation=Revalidation([True]),
+    )
+    outcome = service.start(_command())
+    assert outcome.success
+    assert service.persistence.calls == 1
 
 
 def test_required_pre_execution_audit_failure_blocks_execution():

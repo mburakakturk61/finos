@@ -56,15 +56,24 @@ from app.services.bulk_upload import (
     handle_bulk_upload,
     patch_bulk_upload_item,
 )
+from app.integrations.analysis_http.legacy_security import require_legacy_route_security, resolve_legacy_tenant_id
 
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/bulk-uploads", tags=["bulk-uploads"])
+router = APIRouter(
+    prefix="/api/v1/bulk-uploads", tags=["bulk-uploads"],
+    dependencies=[Depends(require_legacy_route_security)],
+)
 
 
-def _get_batch_or_404(batch_id: uuid.UUID, db: Session) -> BulkUploadBatch:
-    batch = db.get(BulkUploadBatch, batch_id)
+def _get_batch_or_404(
+    batch_id: uuid.UUID, db: Session, tenant_id: uuid.UUID | None,
+) -> BulkUploadBatch:
+    query = select(BulkUploadBatch).where(BulkUploadBatch.id == batch_id)
+    if tenant_id is not None:
+        query = query.where(BulkUploadBatch.tenant_id == tenant_id)
+    batch = db.scalar(query)
     if batch is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -90,6 +99,7 @@ def _get_batch_or_404(batch_id: uuid.UUID, db: Session) -> BulkUploadBatch:
 async def create_bulk_upload(
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> BulkUploadResponse:
     file_inputs: list[UploadedFileInput] = []
     for uploaded_file in files:
@@ -103,7 +113,7 @@ async def create_bulk_upload(
         )
 
     try:
-        batch = handle_bulk_upload(db=db, files=file_inputs)
+        batch = handle_bulk_upload(db=db, files=file_inputs, tenant_id=tenant_id)
     except BulkUploadValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -131,18 +141,20 @@ async def create_bulk_upload(
 def get_bulk_upload_batch(
     batch_id: uuid.UUID,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> BulkUploadBatch:
-    return _get_batch_or_404(batch_id, db)
+    return _get_batch_or_404(batch_id, db, tenant_id)
 
 
 @router.get("/{batch_id}/items", response_model=Page[BulkUploadItemRead])
 def list_bulk_upload_items(
     batch_id: uuid.UUID,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
 ) -> Page[BulkUploadItemRead]:
-    _get_batch_or_404(batch_id, db)
+    _get_batch_or_404(batch_id, db, tenant_id)
 
     settings = get_settings()
     effective_limit = min(
@@ -195,7 +207,9 @@ def update_bulk_upload_item(
     item_id: uuid.UUID,
     payload: BulkUploadItemPatchRequest,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> BulkUploadItem:
+    _get_batch_or_404(batch_id, db, tenant_id)
     company = (
         payload.company.model_dump(mode="json") if payload.company is not None else None
     )
@@ -258,7 +272,9 @@ def bulk_update_bulk_upload_items(
     batch_id: uuid.UUID,
     payload: BulkUploadItemBulkPatchRequest,
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> BulkUploadItemBulkPatchResponse:
+    _get_batch_or_404(batch_id, db, tenant_id)
     decisions = [(entry.item_id, entry.decision.value) for entry in payload.items]
 
     try:
@@ -323,7 +339,9 @@ async def confirm_bulk_upload_endpoint(
     manifest: str = Form(...),
     files: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(resolve_legacy_tenant_id),
 ) -> BulkUploadConfirmResponse:
+    _get_batch_or_404(batch_id, db, tenant_id)
     try:
         raw_entries = json.loads(manifest)
         manifest_entries = [ConfirmManifestEntry.model_validate(entry) for entry in raw_entries]

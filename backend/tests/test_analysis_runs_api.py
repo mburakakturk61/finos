@@ -20,6 +20,9 @@ from app.integrations.analysis_http.contracts import (
 )
 from app.integrations.analysis_http.cursor import CursorKeyring, HmacCursorCodec
 from app.integrations.analysis_http.security import StaticAuthenticationContextProvider
+from app.integrations.analysis_http.router_security import (
+    RouterAuthenticationError, RouterAuthenticationErrorCode,
+)
 from app.main import app
 
 
@@ -274,3 +277,149 @@ def test_openapi_has_eight_stable_operation_ids():
         "get_analysis_run_result_v1", "get_analysis_execution_v1",
         "list_analysis_run_history_v1",
     }
+
+
+class BoundSecurity(Authorization):
+    actor_reference = "srh1:k1:" + "a" * 64
+    requires_same_revalidation_instance = True
+
+    def __init__(self, denied_code=None):
+        super().__init__(True)
+        self.denied_code = denied_code
+        self.actions = []
+
+    def _for(self, action):
+        self.actions.append(action)
+        granted = self.denied_code is None
+        return AuthorizationDecision(granted, False, self.denied_code or "AUTHZ_ALLOWED", "ref", NOW)
+
+    def authorize_start(self, scope, actor): return self._for("analysis.start")
+    def authorize_resume(self, scope, actor): return self._for("analysis.resume")
+    def authorize_resume_source(self, source_run_id, target_scope, actor): return self._for("analysis.resume_source")
+    def authorize_retry(self, scope, actor): return self._for("analysis.retry")
+    def authorize_cancel(self, scope, actor): return self._for("analysis.cancel")
+    def authorize_read(self, scope, actor, *, include_payload): return self._for("analysis.payload.read" if include_payload else "analysis.read")
+    def authorize_endpoint(self, action, scope, actor): return self._for(action)
+    def cache_read_guard(self, scope, actor, decision): pass
+    def cache_cancel_guard(self, scope, actor, decision): pass
+    def revalidate_start(self, scope, actor): return self._for("revalidate.start")
+    def revalidate_resume(self, scope, actor): return self._for("revalidate.resume")
+    def revalidate_retry(self, scope, actor): return self._for("revalidate.retry")
+    def revalidate_resume_source(self, source, scope, actor): return self._for("revalidate.source")
+
+
+class SecureRuntime(Runtime):
+    request_authentication_factory = object()
+
+    def __init__(self, *, denied_code=None, authentication_error=None, **kwargs):
+        super().__init__(**kwargs)
+        self.bound = BoundSecurity(denied_code)
+        self.authentication_error = authentication_error
+
+    def authenticate_request(self, *, authorization_headers, correlation_id, request_id):
+        if self.authentication_error is not None:
+            raise RouterAuthenticationError(self.authentication_error)
+        if not authorization_headers:
+            raise RouterAuthenticationError(RouterAuthenticationErrorCode.MISSING)
+        if authorization_headers != ("Bearer valid-token",):
+            raise RouterAuthenticationError(RouterAuthenticationErrorCode.INVALID)
+        return self.authentication_context_provider
+
+    def bind_request_security(self, **kwargs): return self.bound
+    def application_service(self, *, session, subject_id, authorization=None): return self.service
+    def read_facade(self, *, session, authorization=None): return self.facade
+
+
+def _bearer_headers(**extra):
+    return _headers(Authorization="Bearer valid-token", **extra)
+
+
+def test_step13_missing_malformed_and_unavailable_authentication_are_exact(client):
+    for error, expected, header in (
+        (None, 401, None),
+        (None, 401, "Basic invalid"),
+        (RouterAuthenticationErrorCode.UNAVAILABLE, 503, "Bearer valid-token"),
+    ):
+        runtime = SecureRuntime(authentication_error=error)
+        app.dependency_overrides[require_analysis_runtime] = lambda: runtime
+        headers = _headers()
+        if header is not None: headers["Authorization"] = header
+        response = client.post("/api/v1/analysis-runs", json=_body(), headers=headers)
+        assert response.status_code == expected
+        if expected == 401:
+            assert response.headers["WWW-Authenticate"].startswith("Bearer realm=")
+        assert runtime.bound.actions == []
+    stale = SecureRuntime(issued_at=NOW - timedelta(minutes=16))
+    app.dependency_overrides[require_analysis_runtime] = lambda: stale
+    response = client.post("/api/v1/analysis-runs", json=_body(), headers=_bearer_headers())
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == 'Bearer realm="api", error="invalid_token"'
+    assert stale.bound.actions == []
+
+
+@pytest.mark.parametrize(
+    ("decision_code", "status"),
+    (
+        ("AUTHZ_PERMISSION_NOT_GRANTED", 403),
+        ("AUTHZ_STRENGTH_INSUFFICIENT", 403),
+        ("AUTHZ_PRINCIPAL_KIND_NOT_ALLOWED", 403),
+        ("AUTHZ_RESOURCE_NOT_FOUND", 404),
+        ("AUTHZ_PROVIDER_TIMEOUT", 503),
+        ("AUDIT_REQUIRED_BUT_UNAVAILABLE", 503),
+    ),
+)
+def test_step13_authorization_http_mapping_is_closed(client, decision_code, status):
+    runtime = SecureRuntime(denied_code=decision_code)
+    app.dependency_overrides[require_analysis_runtime] = lambda: runtime
+    response = client.post("/api/v1/analysis-runs", json=_body(), headers=_bearer_headers())
+    assert response.status_code == status
+    assert runtime.service.commands == []
+    assert decision_code not in response.text
+
+
+def test_step13_eight_endpoint_action_matrix(client):
+    view = RunOwnershipView(
+        "run-1", COMPANY_ID, PERIOD_ID, "tenant", "START", "START", None,
+        "subject", "FINALIZED",
+    )
+    class MatrixInspector:
+        def load(self, run_id): return view if run_id == "run-1" else None
+    runtime = SecureRuntime(inspector=MatrixInspector())
+    app.dependency_overrides[require_analysis_runtime] = lambda: runtime
+    base = f"?company_id={COMPANY_ID}&financial_period_id={PERIOD_ID}"
+    read = {"Authorization": "Bearer valid-token", "X-Correlation-ID": "corr", "X-API-Contract-Version": "1.0.0"}
+    assert client.post("/api/v1/analysis-runs", json=_body(), headers=_bearer_headers()).status_code == 201
+    resume = dict(_body())
+    assert client.post("/api/v1/analysis-runs/source-run/resume", json=resume, headers=_bearer_headers(**{"Idempotency-Key": "run-2"})).status_code == 201
+    retry = dict(_body()); retry["original_operation"] = "START"
+    assert client.post("/api/v1/analysis-runs/source-run/retry", json=retry, headers=_bearer_headers(**{"Idempotency-Key": "run-3"})).status_code == 201
+    assert client.post(f"/api/v1/analysis-runs/run-1/cancel{base}", headers=read).status_code == 200
+    assert client.get(f"/api/v1/analysis-runs/run-1/status{base}", headers=read).status_code == 200
+    assert client.get(f"/api/v1/analysis-runs/run-1/result{base}", headers=read).status_code == 200
+    assert client.get(f"/api/v1/analysis-runs/run-1/executions/benchmark{base}", headers=read).status_code == 200
+    assert client.get(f"/api/v1/analysis-runs{base}", headers=read).status_code == 200
+    assert {
+        "analysis.start", "analysis.resume", "analysis.retry", "analysis.resume_source",
+        "analysis.cancel", "analysis.status.read", "analysis.result.read",
+        "analysis.execution.read", "analysis.history.read",
+    } <= set(runtime.bound.actions)
+
+
+def test_step13_raw_identity_header_precedes_bearer_and_admission(client):
+    runtime = SecureRuntime()
+    app.dependency_overrides[require_analysis_runtime] = lambda: runtime
+    response = client.post(
+        "/api/v1/analysis-runs", json=_body(),
+        headers=_bearer_headers(**{"X-Tenant-Id": "attacker"}),
+    )
+    assert response.status_code == 401
+    assert runtime.bound.actions == []
+
+
+def test_step13_openapi_declares_bearer_without_raw_identity_headers():
+    schema = app.openapi()
+    assert schema["components"]["securitySchemes"]["BearerAuth"]["scheme"] == "bearer"
+    operation = schema["paths"]["/api/v1/analysis-runs"]["post"]
+    assert operation["security"] == [{"BearerAuth": []}]
+    rendered = str(operation).lower()
+    assert "x-user-id" not in rendered and "x-tenant-id" not in rendered
