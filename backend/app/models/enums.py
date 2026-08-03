@@ -22,6 +22,13 @@ class PeriodStatus(str, enum.Enum):
     CLOSED = "closed"
 
 
+class PeriodCoverageKind(str, enum.Enum):
+    """Authoritative Cash Flow period coverage semantics (Milestone 4.5C)."""
+
+    DISCRETE = "discrete"
+    CUMULATIVE = "cumulative"
+
+
 class DocumentType(str, enum.Enum):
     """
     Milestone 2'de yalnızca mizan (trial_balance) işlenebiliyordu; diğer kaba

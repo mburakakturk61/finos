@@ -8,6 +8,7 @@ from app.models.bulk_upload_batch import BulkUploadBatch
 from app.models.bulk_upload_item import BulkUploadItem
 from app.models.analysis_run_scope_claim import AnalysisRunScopeClaim
 from app.models.company import Company
+from app.models.cash_flow_cross_period_lineage import CashFlowCrossPeriodLineage
 from app.models.enums import (
     AnalysisSourceRole,
     AnalysisStatus,
@@ -49,6 +50,7 @@ from app.models.security import (
 
 __all__ = [
     "Company",
+    "CashFlowCrossPeriodLineage",
     "FinancialPeriod",
     "FinancialDocument",
     "FinancialAnalysisResult",

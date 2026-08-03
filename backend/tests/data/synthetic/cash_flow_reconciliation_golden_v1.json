@@ -1,0 +1,15 @@
+{
+  "fixture_schema_version": "cash-flow-reconciliation-golden/1.0.0",
+  "synthetic_only": true,
+  "scenarios": [
+    {"scenario": "complete_reconciled", "fx": "-2.00", "estimated": false, "expected_status": "complete_reconciled", "expected_reconciliation": "reconciled", "expected_difference": "0.00"},
+    {"scenario": "complete_unreconciled_immaterial", "fx": "0.00", "estimated": false, "expected_status": "complete_unreconciled", "expected_reconciliation": "unreconciled_non_material", "expected_difference": "-2.00"},
+    {"scenario": "complete_unreconciled_material", "fx": "-102.01", "estimated": false, "expected_status": "complete_unreconciled", "expected_reconciliation": "unreconciled_material", "expected_difference": "100.01"},
+    {"scenario": "partial_reconciled", "fx": "-2.00", "estimated": true, "expected_status": "partial_reconciled", "expected_reconciliation": "reconciled", "expected_difference": "0.00"},
+    {"scenario": "partial_unreconciled", "fx": "0.00", "estimated": true, "expected_status": "partial_unreconciled", "expected_reconciliation": "unreconciled_non_material", "expected_difference": "-2.00"},
+    {"scenario": "insufficient_data", "insufficient": true, "expected_status": "insufficient_data", "expected_reconciliation": "not_performed_insufficient_data", "expected_difference": null},
+    {"scenario": "estimated_investing_financing", "fx": "-2.00", "estimated": true, "expected_status": "partial_reconciled", "expected_reconciliation": "reconciled", "expected_difference": "0.00"},
+    {"scenario": "authoritative_fx", "fx": "-2.00", "estimated": false, "expected_status": "complete_reconciled", "expected_reconciliation": "reconciled", "expected_difference": "0.00"},
+    {"scenario": "endpoint_integrity_failure", "integrity_failure": true, "expected_status": "integrity_failure", "expected_reconciliation": null, "expected_difference": null}
+  ]
+}

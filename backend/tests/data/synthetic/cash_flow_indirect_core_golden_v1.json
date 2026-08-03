@@ -1,0 +1,59 @@
+{
+  "fixture_schema_version": "cash-flow-indirect-core-golden/1.0.0",
+  "synthetic_only": true,
+  "scenarios": [
+    {
+      "scenario": "complete_two_period",
+      "expected_lines": {
+        "net_profit": "100.00",
+        "working_capital_movement_total": "-15.00",
+        "operating_cash_flow": "115.00",
+        "investing_cash_flow": "-135.00",
+        "financing_cash_flow": "222.00",
+        "free_cash_flow": "-25.00"
+      }
+    },
+    {
+      "scenario": "partial_investing_financing",
+      "expected_lines": {
+        "operating_cash_flow": "115.00",
+        "investing_cash_flow": null,
+        "financing_cash_flow": null,
+        "free_cash_flow": null
+      }
+    },
+    {
+      "scenario": "insufficient_data",
+      "expected_lines": {
+        "net_profit": null,
+        "operating_cash_flow": null,
+        "investing_cash_flow": null,
+        "financing_cash_flow": null
+      }
+    },
+    {
+      "scenario": "loss_period",
+      "expected_lines": {
+        "net_profit": "-100.00",
+        "operating_cash_flow": "-85.00"
+      }
+    },
+    {
+      "scenario": "working_capital_reversal",
+      "expected_lines": {
+        "inventory_movement": "50.00",
+        "trade_payables_movement": "-30.00",
+        "working_capital_movement_total": "25.00",
+        "operating_cash_flow": "155.00"
+      }
+    },
+    {
+      "scenario": "estimated_net_investing",
+      "expected_lines": {
+        "estimated_net_investment_movement": "-140.00",
+        "estimated_net_debt_movement": "200.00",
+        "free_cash_flow": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "ratio_codes": [
+    "operating_cash_flow_margin",
+    "free_cash_flow_margin",
+    "cash_flow_to_debt",
+    "cash_return_on_assets",
+    "cash_interest_coverage",
+    "operating_cash_flow_ratio"
+  ],
+  "complete_values": {
+    "operating_cash_flow_margin": 50.0,
+    "free_cash_flow_margin": 50.0,
+    "cash_flow_to_debt": 1.2,
+    "cash_return_on_assets": 60.0,
+    "cash_interest_coverage": -12.0,
+    "operating_cash_flow_ratio": 3.0
+  },
+  "partial_missing_free_cash_flow": "missing_input",
+  "insufficient_status": "not_calculable",
+  "estimated_reliability": "low",
+  "missing_interest_status": "missing_input"
+}

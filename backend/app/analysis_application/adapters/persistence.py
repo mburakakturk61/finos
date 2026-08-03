@@ -6,7 +6,7 @@ import json
 import hashlib
 from datetime import datetime
 
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.analysis_application.contracts import ApplicationEngineCode, ApplicationScopeDTO, FinancialSourceRole
@@ -19,6 +19,7 @@ from app.analysis_application.internal_types import (
 from app.analysis_application.ownership import resolve_financial_ownership_plan
 from app.engines.analysis_orchestrator.types import EngineCode
 from app.models.enums import AnalysisSourceRole, AnalysisStatus, AnalysisType, SourceMode
+from app.models.company import Company
 from app.models.financial_analysis_result import FinancialAnalysisResult
 from app.models.financial_analysis_result_source import FinancialAnalysisResultSource
 from app.orchestration_persistence.blob import FilesystemBlobStore
@@ -55,6 +56,14 @@ class SqlAlchemyRunPersistenceAdapter:
     def persist_terminal_run(
         self, request: ApplicationTerminalPersistenceRequest,
     ) -> TerminalPersistenceResult:
+        self.session.execute(text("SET LOCAL lock_timeout = '5s'"))
+        company_id = self.session.scalar(
+            select(Company.id)
+            .where(Company.id == request.scope.company_id)
+            .with_for_update()
+        )
+        if company_id is None:
+            raise ValueError("Terminal persistence company scope is unavailable.")
         existing_before = self.repository.load_run(request.run_result.run_id)
         savepoint = self.session.begin_nested()
         staged: list[FinancialAnalysisResult] = []

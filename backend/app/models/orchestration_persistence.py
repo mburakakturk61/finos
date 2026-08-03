@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     JSON,
     CheckConstraint,
     DateTime,
@@ -168,12 +169,12 @@ class OrchestrationEngineExecution(Base):
             name="no_result_for_non_result_status",
         ),
         CheckConstraint(
-            "engine_code IN ('fs_balance_sheet','fs_income_statement','ratio','benchmark','health_score','credit_score','recommendation','executive_report','dashboard','render_contract')",
+            "engine_code IN ('fs_balance_sheet','fs_income_statement','cash_flow','ratio','benchmark','health_score','credit_score','recommendation','executive_report','dashboard','render_contract')",
             name="engine_code",
         ),
         CheckConstraint(
-            "((engine_code IN ('fs_balance_sheet','fs_income_statement','ratio')) AND artifact_id IS NULL) OR "
-            "((engine_code NOT IN ('fs_balance_sheet','fs_income_statement','ratio')) AND financial_analysis_result_id IS NULL)",
+            "((engine_code IN ('fs_balance_sheet','fs_income_statement','cash_flow','ratio')) AND artifact_id IS NULL) OR "
+            "((engine_code NOT IN ('fs_balance_sheet','fs_income_statement','cash_flow','ratio')) AND financial_analysis_result_id IS NULL)",
             name="engine_owner_mapping",
         ),
         CheckConstraint(
@@ -196,6 +197,10 @@ class OrchestrationEngineExecution(Base):
             name="no_self_reuse",
         ),
         Index("ix_orchestration_execution_engine_status", "engine_code", "status"),
+        Index(
+            "ix_orchestration_engine_executions_financial_analysis_result_id",
+            "financial_analysis_result_id",
+        ),
     )
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     run_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("orchestration_runs.id", ondelete="RESTRICT"), nullable=False)
@@ -222,6 +227,15 @@ class OrchestrationError(Base):
     __table_args__ = (
         UniqueConstraint("run_id", "error_ordinal", name="uq_orchestration_errors_run_ordinal"),
         CheckConstraint("error_ordinal >= 0", name="ordinal_nonnegative"),
+        CheckConstraint(
+            "(cash_flow_error_code IS NULL AND safe_metadata_json IS NULL AND error_retryable IS NULL) OR "
+            "(cash_flow_error_code IS NOT NULL AND safe_metadata_json IS NOT NULL AND error_retryable IS NOT NULL)",
+            name="cash_flow_extension_all_null_or_set",
+        ),
+        CheckConstraint(
+            "cash_flow_error_code IS NULL OR engine_code = 'cash_flow'",
+            name="cash_flow_extension_engine",
+        ),
     )
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     run_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("orchestration_runs.id", ondelete="RESTRICT"), nullable=False)
@@ -231,4 +245,7 @@ class OrchestrationError(Base):
     engine_code: Mapped[str | None] = mapped_column(String(64))
     message: Mapped[str] = mapped_column(String(1000), nullable=False)
     original_exception_type: Mapped[str | None] = mapped_column(String(255))
+    cash_flow_error_code: Mapped[str | None] = mapped_column(String(64))
+    safe_metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE)
+    error_retryable: Mapped[bool | None] = mapped_column(Boolean)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

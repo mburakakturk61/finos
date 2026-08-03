@@ -4,19 +4,22 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
     ForeignKey,
     Integer,
+    String,
     UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.schema import conv
 from sqlalchemy.types import Uuid
 
 from app.db.base import Base
-from app.models.enums import PeriodStatus, PeriodType
+from app.models.enums import PeriodCoverageKind, PeriodStatus, PeriodType
 
 if TYPE_CHECKING:
     from app.models.company import Company
@@ -48,6 +51,38 @@ class FinancialPeriod(Base):
             "id",
             "company_id",
             name="uq_financial_periods_id_company_id",
+        ),
+        CheckConstraint(
+            "(accounting_basis_code IS NULL AND accounting_policy_version IS NULL "
+            "AND annual_reporting_period_start_date IS NULL "
+            "AND annual_reporting_period_end_date IS NULL "
+            "AND ifrs18_early_adopted IS NULL AND cash_flow_coverage_kind IS NULL) OR "
+            "(accounting_basis_code IS NOT NULL AND accounting_policy_version IS NOT NULL "
+            "AND annual_reporting_period_start_date IS NOT NULL "
+            "AND annual_reporting_period_end_date IS NOT NULL "
+            "AND ifrs18_early_adopted IS NOT NULL AND cash_flow_coverage_kind IS NOT NULL)",
+            name=conv("ck_financial_periods_cf_policy_all_null_or_set"),
+        ),
+        CheckConstraint(
+            "accounting_basis_code IS NULL OR "
+            "(accounting_basis_code = 'tr_tdhp_accrual' "
+            "AND accounting_policy_version = 'tr_tdhp_accrual/1.0.0')",
+            name=conv("ck_financial_periods_cf_supported_basis_policy"),
+        ),
+        CheckConstraint(
+            "annual_reporting_period_start_date IS NULL OR "
+            "(annual_reporting_period_start_date <= start_date "
+            "AND start_date <= end_date "
+            "AND end_date <= annual_reporting_period_end_date)",
+            name=conv("ck_financial_periods_cf_annual_containment"),
+        ),
+        CheckConstraint(
+            "cash_flow_coverage_kind IS NULL OR "
+            "(period_type = 'year_end' AND cash_flow_coverage_kind = 'cumulative') OR "
+            "(period_type = 'monthly' AND cash_flow_coverage_kind = 'discrete') OR "
+            "(period_type = 'temporary_tax' AND cash_flow_coverage_kind = 'cumulative') OR "
+            "period_type IN ('quarter', 'custom')",
+            name=conv("ck_financial_periods_cf_coverage_kind"),
         ),
     )
 
@@ -102,6 +137,22 @@ class FinancialPeriod(Base):
         ),
         nullable=False,
         default=PeriodStatus.DRAFT,
+    )
+
+    accounting_basis_code: Mapped[str | None] = mapped_column(String(32))
+    accounting_policy_version: Mapped[str | None] = mapped_column(String(64))
+    annual_reporting_period_start_date: Mapped[date | None] = mapped_column(Date)
+    annual_reporting_period_end_date: Mapped[date | None] = mapped_column(Date)
+    ifrs18_early_adopted: Mapped[bool | None] = mapped_column(Boolean)
+    cash_flow_coverage_kind: Mapped[PeriodCoverageKind | None] = mapped_column(
+        Enum(
+            PeriodCoverageKind,
+            name=conv("ck_financial_periods_cash_flow_coverage_kind"),
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        )
     )
 
     created_at: Mapped[datetime] = mapped_column(
