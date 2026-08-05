@@ -1,12 +1,12 @@
-# FINOS Architecture Book v1.6.0
+# FINOS Architecture Book v1.7.0
 
 **FINOS Constitution — Tek Resmi Mimari Referans**
 
 | | |
 |---|---|
 | Doküman durumu | ONAYLANMIŞ — Resmi Referans |
-| Versiyon | 1.6.0 |
-| Kapsadığı sistem durumu | Milestone 1 → Milestone 5.0E ve Milestone 4.5 Cash Flow Engine (Docker doğrulanmış: 2247 passed, 0 failed, 0 skipped) |
+| Versiyon | 1.7.0 |
+| Kapsadığı sistem durumu | Milestone 1 → Milestone 5.0E, Milestone 4.5 Cash Flow Engine ve Milestone 4.6 Multi-Period Trend Engine (Docker doğrulanmış: 2880 passed, 0 failed, 0 skipped) |
 | Bu dokümanın rolü | Bundan sonra yazılacak **her** milestone'un bağlayıcı referans kaynağı |
 | Değiştirme yetkisi | Yalnızca açık kullanıcı onayı ile, ayrı bir revizyon turunda |
 | "FINOS" ifadesinin statüsü | **Yalnızca dahili geliştirme kod adıdır** — nihai ticari marka/ürün adı değildir (bkz. Bölüm 0) |
@@ -17,7 +17,7 @@
 
 Bu doküman, FINOS platformunun mimarisini anlatan tek resmi kaynaktır. Milestone tasarım dokümanları (`docs/FINOS_MILESTONE_*_DESIGN.md`), belirli bir motorun veya özelliğin ayrıntılı tasarımını taşır; bu kitap ise onların hepsinin uyduğu **üst düzey, kalıcı kuralları** taşır. Bir milestone tasarım dokümanı ile bu kitap çelişirse, bu kitap bağlayıcıdır — çelişki bir tasarım hatası olarak ele alınır ve çözülür.
 
-Bu kitap **icat edilmiş** bir mimari değildir. FINOS'un bugüne kadar inşa edilmiş, testleri gerçek bir Docker ortamında 2247 passed, 0 failed, 0 skipped sonucu veren on finansal engine'inin, bunları koordine eden saf Analysis Orchestrator katmanlarının (değişmemiş Milestone 5.0A ve Cash Flow için ayrı V3 sözleşmesi), Orchestration Persistence & Recovery Foundation katmanlarının (5.0B ve ayrı Persistence-v3), framework-bağımsız Analysis Application Layer'ların (5.0C ve ayrı Application-v2), versioned API & Integration Layer'ın (Milestone 5.0D) ve bunun production kimlik/güvenlik sınırını uygulayan Authentication & Authorization katmanının (Milestone 5.0E) davranışını, kurallarını ve sözleşmelerini olduğu gibi kayda geçirir. Milestone 4.5, dolaylı yöntemli Cash Flow Engine'i ve onun çok-dönemli, kanıt-temelli entegrasyonlarını eklemiş; 5.0A–5.0E public sözleşmelerini değiştirmemiştir. Her madde, kod tabanında halihazırda uygulanmış bir gerçeği tarif eder; hiçbir madde henüz var olmayan bir davranışı vaat etmez.
+Bu kitap **icat edilmiş** bir mimari değildir. FINOS'un bugüne kadar inşa edilmiş, testleri gerçek bir Docker ortamında 2880 passed, 0 failed, 0 skipped sonucu veren finansal engine'lerinin, bunları koordine eden saf Analysis Orchestrator katmanlarının (değişmemiş Milestone 5.0A; Cash Flow için ayrı V3; Multi-Period Trend için ayrı V4 sözleşmesi), Orchestration Persistence & Recovery Foundation katmanlarının (5.0B, Persistence-v3 ve Persistence-v4), framework-bağımsız Analysis Application Layer'ların (5.0C, Application-v2 ve Application-v3), versioned API & Integration Layer'ın (Milestone 5.0D) ve bunun production kimlik/güvenlik sınırını uygulayan Authentication & Authorization katmanının (Milestone 5.0E) davranışını, kurallarını ve sözleşmelerini olduğu gibi kayda geçirir. Milestone 4.5 dolaylı yöntemli Cash Flow Engine'i; Milestone 4.6 ise authoritative N-dönem çözümleme, 45 metrikli nominal trend analizi, immutable lineage ve Report 1.2.0 projection'ını eklemiş, 5.0A–5.0E public sözleşmelerini değiştirmemiştir. Her madde, kod tabanında halihazırda uygulanmış bir gerçeği tarif eder; hiçbir madde henüz var olmayan bir davranışı vaat etmez.
 
 Bu kitabı okuyan biri — insan veya gelecekteki bir implementasyon turu — şu soruların cevabını burada bulmalıdır: *Bir motor ne yapar, ne yapmaz? Yeni bir motor nasıl eklenir? Bir registry nasıl büyütülür? Hangi işlemler kesinlikle yasaktır? Bir milestone ne zaman "tamamlanmış" sayılır?*
 
@@ -134,11 +134,11 @@ FINOS backend'i, FastAPI tabanlı bir Python servisidir (`fastapi`, `uvicorn`, `
 
 **B. Authentication & Authorization Layer** (`app/security/**`, `app/integrations/analysis_http/router_security.py`, `legacy_security.py`) — provider-neutral JWT/JWKS doğrulaması, authoritative tenant/principal/membership çözümlemesi, permission registry ve policy evaluation, request-bound security context, 5.0C `AuthorizationPort` adapter'ı, route protection, audit teslimi ve redaction sınırını sahiplenir. Authentication kimliği kanıtlar; authorization erişim kararını ayrı verir. Her iki sınır da outage, revoke ve integrity failure durumunda fail-closed'dur.
 
-**C. Kalıcılık ve mevcut servisler** (`app/models`, `app/services`, `app/db`, `app/core`, `app/classification`, `app/trial_balance`, `app/orchestration_persistence`, `app/orchestration_persistence_v3`) — mizan yükleme, belge sınıflandırma, şirket/dönem/belge kalıcılığı, bulk-upload, terminal orchestration persistence ve Cash Flow cross-period lineage gibi veritabanı-bağımlı işlevleri barındırır. SQLAlchemy ORM modelleri (`app/models/*.py`), integration repository'leri (`app/integrations/cash_flow_*_repository.py`) ve Alembic migration'ları (`alembic/`) burada yaşar.
+**C. Kalıcılık ve mevcut servisler** (`app/models`, `app/services`, `app/db`, `app/core`, `app/classification`, `app/trial_balance`, `app/orchestration_persistence`, `app/orchestration_persistence_v3`, `app/orchestration_persistence_v4`) — mizan yükleme, belge sınıflandırma, şirket/dönem/belge kalıcılığı, bulk-upload, terminal orchestration persistence, Cash Flow cross-period lineage ve Multi-Period Trend revision/lineage metadata'sı gibi veritabanı-bağımlı işlevleri barındırır. SQLAlchemy ORM modelleri (`app/models/*.py`), integration repository'leri (`app/integrations/cash_flow_*_repository.py`, `trend_*_repository.py`) ve Alembic migration'ları (`alembic/`) burada yaşar.
 
-**D. Analysis Application Layer** (`app/analysis_application/**`, `app/analysis_application_v2/**`) — API/integration caller sözleşmeleri ile saf Orchestrator ve persistence portları arasındaki framework-bağımsız, senkron use-case koordinasyon bölgesidir. Değişmemiş 5.0C sözleşmesi yanında Cash Flow'u taşıyan ayrı major-version Application-v2 bulunur. Core sözleşme ve servisleri FastAPI, Pydantic ve SQLAlchemy'den bağımsızdır; framework/persistence ayrıntıları yalnız adapter sınırında bulunur.
+**D. Analysis Application Layer** (`app/analysis_application/**`, `app/analysis_application_v2/**`, `app/analysis_application_v3/**`) — API/integration caller sözleşmeleri ile saf Orchestrator ve persistence portları arasındaki framework-bağımsız, senkron use-case koordinasyon bölgesidir. Değişmemiş 5.0C sözleşmesi yanında Cash Flow'u taşıyan Application-v2 ve Multi-Period Trend'i taşıyan Application-v3 ayrı major-version aileleridir. Core sözleşme ve servisleri FastAPI, Pydantic ve SQLAlchemy'den bağımsızdır; framework/persistence ayrıntıları yalnız adapter sınırında bulunur.
 
-**E. Engine katmanı** (`app/engines/**`) — SIFIR SQLAlchemy bağımlılığı olan, saf, deterministik, read-only hesaplama motorlarının bulunduğu katman. Dolaylı yöntemli Cash Flow Engine (`app/engines/cash_flow/**`) ve legacy 5.0A'yı değiştirmeyen ayrı V3 koordinasyon katmanı (`app/engines/analysis_orchestrator_v3/**`) bu sınırdadır. Bu katman, girdi olarak yalnızca sade Python veri yapıları (dict/dataclass) alır, çıktı olarak yalnızca sade Python veri yapıları (frozen dataclass) üretir. Hiçbir engine modülü veritabanına bağlanmaz, HTTP çağrısı yapmaz, dosya sistemine yazmaz.
+**E. Engine katmanı** (`app/engines/**`) — SIFIR SQLAlchemy bağımlılığı olan, saf, deterministik, read-only hesaplama motorlarının bulunduğu katman. Dolaylı yöntemli Cash Flow Engine (`app/engines/cash_flow/**`), nominal Multi-Period Trend Engine (`app/engines/multi_period_trend/**`) ve legacy public sözleşmeleri değiştirmeyen ayrı V3/V4 koordinasyon katmanları bu sınırdadır. Bu katman, girdi olarak yalnızca sade Python veri yapıları (dict/dataclass) alır, çıktı olarak yalnızca sade Python veri yapıları (frozen dataclass) üretir. Hiçbir engine modülü veritabanına bağlanmaz, HTTP çağrısı yapmaz, dosya sistemine yazmaz.
 
 Analysis request bağımlılık yönü tek yönlüdür:
 
@@ -209,7 +209,7 @@ Bu foundation'ın sınırları şöyledir:
 - **Snapshot Builder:** yalnız persistence kayıtlarından ve doğrulanmış owner payload'larından 5.0A `PreviousExecutionSnapshot`/`PreviousEngineSnapshot` nesnelerini materialize eder.
 - **Artifact Store / Blob Store sınırı:** deterministic canonical JSON codec, SHA-256 bütünlük kontrolü ve inline/external tier seçimini sahiplenir. `BlobStorePort` provider-neutral'dır; mevcut reference adapter durable filesystem kullanır.
 
-**Persistence modelleri ve tablo sahipliği:** `orchestration_runs` run identity, request fingerprint, terminal status/versions ve terminal content digest'in; `orchestration_engine_executions` sıralı motor execution metadata'sı, input fingerprint, owner FK ve reuse lineage'ın; `orchestration_errors` structured error history'sinin; `orchestration_artifacts` finansal olmayan canonical payload ve digest'in; `orchestration_physical_objects` external blob metadata'sının sahibidir. `orchestration_artifact_locations`, canonical artifact/object satırlarını değiştirmeden fiziksel konum indirection'ı için ayrılmış mutable pointer tablosudur. Milestone 5.0B foundation revision'ı `4f9d2a6b8c10`, Milestone 5.0C scope-claim revision'ı `5c1a7e9d3b20`, Milestone 5.0D revision'ı `8b6e4d2c1a90`, Milestone 5.0E identity foundation/enforcement revision'ları `a1e5f0c7d901` ve `b2e5f0c7d902`, Milestone 4.5 period-policy revision'ı `c4f7a9d2e103` ve immutable cross-period lineage revision'ı `d7e9a4c6f205`; güncel tek Alembic head `d7e9a4c6f205`'dir.
+**Persistence modelleri ve tablo sahipliği:** `orchestration_runs` run identity, request fingerprint, terminal status/versions ve terminal content digest'in; `orchestration_engine_executions` sıralı motor execution metadata'sı, input fingerprint, owner FK ve reuse lineage'ın; `orchestration_errors` structured error history'sinin; `orchestration_artifacts` finansal olmayan canonical payload ve digest'in; `orchestration_physical_objects` external blob metadata'sının sahibidir. `orchestration_artifact_locations`, canonical artifact/object satırlarını değiştirmeden fiziksel konum indirection'ı için ayrılmış mutable pointer tablosudur. Milestone 5.0B foundation revision'ı `4f9d2a6b8c10`, Milestone 5.0C scope-claim revision'ı `5c1a7e9d3b20`, Milestone 5.0D revision'ı `8b6e4d2c1a90`, Milestone 5.0E identity foundation/enforcement revision'ları `a1e5f0c7d901` ve `b2e5f0c7d902`, Milestone 4.5 period-policy revision'ı `c4f7a9d2e103`, immutable Cash Flow lineage revision'ı `d7e9a4c6f205` ve Multi-Period Trend revision/lineage revision'ı `e8f1b6d3a704`; güncel tek Alembic head `e8f1b6d3a704`'tür.
 
 **Storage Ownership Matrix — tek payload sahibi ilkesi:**
 
@@ -218,6 +218,9 @@ Bu foundation'ın sınırları şöyledir:
 | Run identity, request fingerprint, terminal status ve orchestration versions | `orchestration_runs` | History/application projection'ları |
 | BS, IS, Ratio ve Cash Flow payload'ları | `financial_analysis_results` | `orchestration_engine_executions.financial_analysis_result_id` |
 | Cash Flow cross-period lineage | `cash_flow_cross_period_lineages` (yalnız immutable owner/digest/source referansları) | Cash Flow financial owner ve source owner FK'leri |
+| Multi-Period Trend payload'ı | `financial_analysis_results` (`AnalysisType.MULTI_PERIOD_TREND`) | V4 execution owner FK'si ve trend lineage referansları |
+| Financial result revision/restatement metadata'sı | `financial_analysis_result_revision_metadata` (bir result için tek immutable profil/chain-head kaydı) | Trend resolver ve lineage doğrulaması |
+| Multi-Period Trend N-dönem lineage'ı | `trend_analysis_lineages` (yalnız immutable source owner/digest/period/rol referansları) | Trend financial owner FK'si |
 | Benchmark, Health Score, Credit Score, Recommendation, Executive Report, Dashboard ve Render Contract payload'ları | `orchestration_artifacts` | `orchestration_engine_executions.artifact_id` |
 | External payload byte'ları | Blob store; metadata sahibi `orchestration_physical_objects` | `orchestration_artifacts.physical_object_id` ve location indirection |
 | Structured execution error'ları | `orchestration_errors` | Run/execution FK'leri |
@@ -324,6 +327,20 @@ versioned application contracts + senkron use-case service
 
 **Güvenlik ve kapsam sınırı:** Cash Flow application/persistence akışı mevcut tenant/company/period/subject scope claim, authentication, authorization ve pre-persistence revalidation kurallarını devralır. Local cache, queue, worker, scheduler, background execution, distributed lock, automatic retry/backoff, yeni HTTP route veya yeni permission/action eklenmemiştir. Group consolidation/elimination ve doğrudan yöntem 4.5 kapsamı dışındadır.
 
+### Multi-Period Trend Engine ve N-dönem Analysis Platform genişlemesi (Milestone 4.6)
+
+`app/engines/multi_period_trend/**`, tek tenant, tek şirket/legal entity ve tek para birimi içindeki authoritative finansal sonuçları nominal N-dönem serilerine dönüştüren saf, deterministik ve read-only engine'dir. Konsolidasyon/eliminasyon, enflasyon düzeltmesi, tahminleme, favorability veya score üretmez. Kaynak Financial Statements/Cash Flow/Ratio sonuçlarını yeniden hesaplamaz.
+
+**Metrik ve dönem sözleşmesi:** `TREND_METRIC_REGISTRY_V1`, exact **45 metrik** taşır: 11 Balance Sheet, 11 Income Statement, 7 Cash Flow ve 16 Ratio. Canonical digest `1b2085553cd2009c349cbca45d5f6ebc9f2f8ba07f9b9ee1b2930554bc52d19e`'dir. Altı period family; annual, monthly-discrete, quarterly-discrete, quarterly-cumulative-YOY, temporary-tax-cumulative-YOY ve custom-discrete akışlarını birbirinden ayırır. Pairwise değişim için en az 2, direction için 3, volatility için 4, break tespiti için 5 uygun gözlem gerekir. Eksik dönem veya metrik sıfır kabul edilmez; monetary ve ratio serileri `Decimal` ve `ROUND_HALF_EVEN` ile canonicalize edilir, negatif sıfır kalıcılaşmaz.
+
+**Authoritative seri çözümleme:** Application-v3 caller'dan explicit, sıralı financial result ID'leri alır; "latest result" seçimi, pozitif cache veya implicit source discovery yoktur. `trend_period_repository.py`, her source'un tenant/company/period/type/status/currency, canonical digest ve `financial_analysis_result_revision_metadata` profilini PostgreSQL'den doğrular. Restatement chain-head, superseded owner, period gap/overlap, cumulative/discrete karışımı, accounting basis/policy ve cadence farkı sessizce birleştirilmez. Company lock altında terminal re-query, execution öncesi çözülen source set'in persistence anında da aynı kaldığını fail-closed doğrular.
+
+**Hesaplama, evidence ve data quality:** Engine her uygun pair için mutlak değişim ve korumalı yüzde değişim; uygun gapless serilerde yön, CAGR, volatilite ve trend-break üretir. Sıfır payda, negatif taban, işaret değişimi, restatement segmenti ve gap kuralları kapalı taxonomy ile ele alınır; gap üzerinden transition kurulmaz. Evidence `EXACT`, `DERIVED`, `ESTIMATED`, `UNAVAILABLE` olarak observation → transition → aggregate zincirinde en zayıf kanıt kuralıyla korunur. Completeness, expected `45 × N` gözlemden deterministik olarak hesaplanır; ayrı, uydurma bir genel confidence score'u yoktur.
+
+**Tek sahiplik, revision metadata ve N-dönem lineage:** Trend payload'ının tek canonical sahibi `FinancialAnalysisResult` (`AnalysisType.MULTI_PERIOD_TREND`)'tır. `financial_analysis_result_revision_metadata`, ORIGINAL/RESTATED/UNDECLARED_LEGACY profilini ve authoritative chain-head bilgisini; `trend_analysis_lineages` ise ordered source owner/digest/period/rol referanslarını payload kopyalamadan taşır. Owner, revision metadata, N-dönem lineage, V4 engine execution ve terminal run aynı transaction'da yazılır. Concurrent idempotent loser'da staged owner/metadata/lineage SAVEPOINT rollback/discard ile kalıcılaşmaz. Immutable trigger'lar `UPDATE`/`DELETE`'i reddeder; bu model event sourcing değildir.
+
+**V4/Application-v3/Persistence-v4 ve Report 1.2.0:** `analysis_orchestrator_v4` exact **12 düğüm, 23 `all_of`, 2 `any_of`, 4 `optional`, toplam 29 kenar** taşır. Trend trusted `TrendPreResolvedContextV1` ile beslenir; graph içinde upstream'i yoktur ve Executive Report'a yalnız optional edge verir. `analysis_application_v3` scope/idempotency/authorization revalidation ve source re-query akışını; `orchestration_persistence_v4` owner/revision/lineage atomikliğini sahiplenir. V3/Application-v2/Persistence-v3 ve 5.0A–5.0E public sözleşmeleri dondurulmuştur. Executive Report `1.2.0`, registry ile sabitlenmiş exact 12 trend metriğini presentation-only olarak projekte eder; Report 1.0.0/1.1.0, Ratio/Benchmark/Health/Credit/Recommendation sonuçları ve score ağırlıkları değişmez. Grup şirketleri ve konsolidasyon/eliminasyon Milestone 4.7 kapsamında kalır.
+
 API katmanı ile engine katmanı arasındaki köprü, `app/engines/protocol.py`'de tanımlı `EngineSourceRef`/`EngineRunContext` sözleşme katmanıdır (Milestone 4.1+). Bu dosya, kalıcılık katmanının engine sonuçlarını nasıl referanslayacağını tanımlar; engine'lerin kendisi bu sözleşmeye bağımlı değildir — bağımlılık tek yönlüdür (API → engine, asla tersi değil).
 
 ---
@@ -377,6 +394,8 @@ Bu graph **tek yönlüdür**: hiçbir engine, kendisine bağımlı olan bir engi
 
 **Cash Flow V3 graph'ı (Milestone 4.5):** `app/engines/analysis_orchestrator_v3/registry.py`, legacy registry'yi mutasyona uğratmadan Cash Flow düğümünü taşıyan ayrı major-version grafıdır. Exact shape **11 düğüm, 23 `all_of`, 2 `any_of`, 3 `optional`, toplam 28 kenar** olarak import-zamanında doğrulanır. Cash Flow current/prior BS/IS ve authoritative period-resolution girdileriyle çalışır; Ratio ve Executive Report cash-flow sonucunu yalnız V3 sözleşmesinde tüketir. Dashboard ve Render Contract'ın mevcut sorumluluk sınırları korunur. V3 dispatch de doğrudan callable referanslarından oluşur; dinamik import/string dispatch yoktur.
 
+**Multi-Period Trend V4 graph'ı (Milestone 4.6):** `app/engines/analysis_orchestrator_v4/registry.py`, V3 registry'yi mutasyona uğratmadan `MULTI_PERIOD_TREND` düğümünü ekleyen ayrı major-version grafıdır. Exact shape **12 düğüm, 23 `all_of`, 2 `any_of`, 4 `optional`, toplam 29 kenar** olarak import-zamanında doğrulanır. Trend node'un graph upstream'i yoktur; explicit source set'ten authoritative olarak çözülmüş `TrendPreResolvedContextV1` Application-v3 tarafından sağlanır. Executive Report trend sonucunu tek optional edge ile tüketebilir; Ratio'ya trend edge'i yoktur. V4 dispatch doğrudan callable referanslarından oluşur; dinamik import/string dispatch yoktur.
+
 ---
 
 ## 4. Tüm Engine'lerin Sorumlulukları
@@ -388,6 +407,10 @@ Normalize edilmiş mizan hesap ağacından, Türk muhasebe standardına (Tekdüz
 ### 4.1.1 Cash Flow (`app/engines/cash_flow`)
 
 Authoritative current/prior period finansal sonuçları ve hesap eşleştirme registry'sinden, dolaylı yöntemle işletme, yatırım ve finansman nakit akışlarını üretir. Açılış/kapanış nakit ve nakit benzerleriyle mutabakat yapar; her satırın evidence, derivation ve source lineage'ını immutable `CashFlowResult` içinde taşır. Eksik veriyi sıfıra dönüştürmez ve mutabakat plug'ı üretmez.
+
+### 4.1.2 Multi-Period Trend (`app/engines/multi_period_trend`)
+
+Authoritative ve karşılaştırılabilir N-dönem Financial Statements/Cash Flow/Ratio sonuçlarından 45 canonical metrik serisi üretir. Pairwise değişim, direction, CAGR, volatility ve break hesaplarını yalnız ilgili minimum veri, cadence, gap, sign ve evidence kuralları sağlandığında üretir. Upstream sonuçları yeniden hesaplamaz; eksik değeri sıfır, nominal büyümeyi reel büyüme veya farklı şirketleri konsolide seri olarak sunmaz.
 
 ### 4.2 Ratios (`app/engines/financial_ratios`)
 
@@ -442,6 +465,15 @@ Zaten üretilmiş bir `ExecutiveReportResult`'ı girdi alarak, belirli bir rende
 | Output | Frozen `CashFlowResult`: operating/investing/financing, opening/closing cash, net change, reconciliation, completeness/data-quality, evidence ve lineage |
 | Yapar | Dolaylı yöntem; working-capital/non-cash adjustment; investing/financing sınıflandırması; Decimal/HALF_EVEN hesaplama; tolerance/materiality mutabakatı |
 | Asla Yapmaz | Eksik değeri sıfır saymaz, FX/reclassification plug üretmez, doğrudan yöntem veya grup eliminasyonu yapmaz, DB/HTTP/filesystem erişmez |
+
+### 5.1.2 Multi-Period Trend
+
+| | |
+|---|---|
+| Input | Explicit ve authoritative N-dönem source set'ten çözülmüş frozen `TrendPreResolvedContextV1`; period/restatement/comparability proof'ları; 45-metrik registry/policy digest'i |
+| Output | Frozen `TrendAnalysisResult`: 45 ordered metric sonucu, observations/transitions/aggregates, direction/CAGR/volatility/break, completeness, evidence ve source/lineage proof'ları |
+| Yapar | Uygun serilerde mutlak ve korumalı yüzde değişim; 3/4/5 gözlem eşikli direction/volatility/break; uygun annual gapless segmentte CAGR; deterministic evidence/completeness |
+| Asla Yapmaz | Kaynak sonuç yeniden hesaplamaz, gap köprülemez, eksik metriği sıfır saymaz, confidence/score/favorability/forecast/enflasyon düzeltmesi/konsolidasyon üretmez, DB/HTTP/filesystem erişmez |
 
 ### 5.2 Ratios
 
@@ -529,10 +561,13 @@ Her engine'in kanonik veri kümesi (oranlar, benchmark'lar, skor kuralları, ön
 - `ENGINE_DEPENDENCY_REGISTRY` (10 düğüm, 24 kenar) — `app/engines/analysis_orchestrator/registry.py`
 - Cash Flow account/family/policy registry'leri — `app/engines/cash_flow/registry.py` ve `policy.py`
 - `ENGINE_DEPENDENCY_REGISTRY_V3` (11 düğüm, 28 kenar) — `app/engines/analysis_orchestrator_v3/registry.py`
+- `TREND_METRIC_REGISTRY_V1` (45 kayıt: 11 BS + 11 IS + 7 Cash Flow + 16 Ratio; digest `1b2085553cd2009c349cbca45d5f6ebc9f2f8ba07f9b9ee1b2930554bc52d19e`) — `app/engines/multi_period_trend/registry.py`
+- `ENGINE_DEPENDENCY_REGISTRY_V4` (12 düğüm, 29 kenar) — `app/engines/analysis_orchestrator_v4/registry.py`
+- Report 1.2.0 trend presentation manifest'i (exact 12 metrik) — `app/engines/executive_reports/trend_integration.py`
 
 **`ORCHESTRATOR_ENGINE_DISPATCH` bir registry DEĞİLDİR (kesin ayrım):** `app/engines/analysis_orchestrator/dispatch.py`'deki `ORCHESTRATOR_ENGINE_DISPATCH`, dokuz motorun gerçek, çağrılabilir fonksiyon referanslarını tutar — ama bu, yukarıdaki registry'lerin aksine hiçbir kayıt-doğrulama mantığı taşımaz; yalnızca **import-zamanında, doğrudan Python `import` ifadeleriyle bir kez doldurulan sabit bir eşlemedir.** `ENGINE_DEPENDENCY_REGISTRY` "hangi motor hangi motora bağımlı" (metadata) sorusuna, `ORCHESTRATOR_ENGINE_DISPATCH` ise "bu motoru gerçekte nasıl çağırırım" (executable) sorusuna cevap verir — bu ikisi KESİN OLARAK AYRI iki yapıdır (bkz. Bölüm 18-19, dinamik dispatch yasağı).
 
-V3 karşılıkları `ENGINE_DEPENDENCY_REGISTRY_V3` ve `ORCHESTRATOR_ENGINE_DISPATCH_V3` aynı ayrımı korur. Cash Flow account mapping çözümlemesi exact-code, longest-prefix, explicit-role ve unclassified önceliğini registry/policy içinde doğrular; çalışma zamanında registry büyütülmez.
+V3/V4 karşılıkları `ENGINE_DEPENDENCY_REGISTRY_V3`/`V4` ve `ORCHESTRATOR_ENGINE_DISPATCH_V3`/`V4` aynı ayrımı korur; dispatch yapıları registry değildir. Cash Flow account mapping çözümlemesi exact-code, longest-prefix, explicit-role ve unclassified önceliğini registry/policy içinde doğrular. Trend metric registry ve Report 1.2.0 presentation manifest'i de import sonrası büyütülmez.
 
 **Kayıt anında doğrula (validate-at-registration) prensibi:** Her registry, bir kayıt eklendiği anda o kaydın tüm yapısal kurallarını doğrular (bağımlılık kodlarının var olduğu, döngü olmadığı, aynı domain'in iki "full" section'da olmadığı, vb.). Geçersiz bir kayıt, modül import edilirken (yani uygulama başlarken) hemen hata fırlatır — çalışma zamanında sessizce yutulan bir hata asla olmaz.
 
@@ -576,6 +611,9 @@ Her engine ve her paylaşımlı registry, kendi bağımsız versiyon sabitini ta
 | Analysis Orchestrator (koordinasyon) | `ORCHESTRATION_SCHEMA_VERSION` / `ORCHESTRATION_MODEL_VERSION` | `2.0.0` / `2.0.0` |
 | Analysis Orchestrator (execution plan) | `EXECUTION_PLAN_VERSION` | `2.0.0` |
 | Analysis Orchestrator (input fingerprint) | `FINGERPRINT_SCHEMA_VERSION` | `1.0.0` |
+| Multi-Period Trend | `TREND_SCHEMA_VERSION` / `TREND_MODEL_VERSION` | `1.0.0` / `1.0.0` |
+| Analysis Orchestrator V4 | `ORCHESTRATION_SCHEMA_VERSION_V4` / `ORCHESTRATION_MODEL_VERSION_V4` / `EXECUTION_PLAN_VERSION_V4` / `FINGERPRINT_SCHEMA_VERSION_V4` | `4.0.0` / `4.0.0` / `4.0.0` / `4.0.0` |
+| Executive Report trend projection | `REPORT_SCHEMA_VERSION_V1_2_TREND` / `REPORT_MODEL_VERSION_V1_2_TREND` | `1.2.0` / `1.2.0` |
 
 Analysis Orchestrator'ın kendi versiyon eksenleri, motorların KENDİ schema/model versiyonlarından AYRIDIR: `ORCHESTRATION_SCHEMA_VERSION`/`ORCHESTRATION_MODEL_VERSION`, `OrchestrationRunRequest`/`OrchestrationRunResult`'ın kendi alan yapısını ve davranış mantığını (ör. reuse kuralı, durum-eşleme tablosu) izler; `EXECUTION_PLAN_VERSION`, `ENGINE_DEPENDENCY_REGISTRY`'nin yapısını (yeni bir motor eklendiğinde artar) izler; `FINGERPRINT_SCHEMA_VERSION`, girdi parmak izi (input fingerprint) hesaplama algoritmasının kendisini izler.
 
@@ -692,15 +730,17 @@ FINOS iki paralel test rejimi kullanır:
 
 **A. Sandbox test rejimi** (bu konuşma/implementasyon ortamında kullanılır): `sqlalchemy`/`fastapi`/`pydantic` paketleri PyPI proxy'den kurulamadığı için, `app.models` için `sys.modules`'e önceden kaydedilen bir stub namespace paketi tekniğiyle, `app/models/__init__.py`'nin eager ORM importlarını hiç çalıştırmadan yalnızca `app.engines.**` (SIFIR sqlalchemy bağımlılığı) testlerini gerçekten çalıştırmak mümkündür (`run_tests.py`). Bu rejim, hızlı geri bildirim döngüsü için kullanılır ama **nihai kabul kriteri değildir.**
 
-**B. Gerçek Docker test rejimi** (nihai kabul kriteri): `PYTHONPATH=/app python -m pytest tests/ -v`, tam bağımlılık kurulu gerçek bir konteynerde çalıştırılır. **Hiçbir milestone, gerçek Docker ortamında `0 failed` sonucu görülmeden "tamamlandı" ilan edilemez.** Milestone 4.4, bu rejimde 886/886 test ile; Milestone 5.0A (Analysis Orchestrator), 971/971 test ile; Milestone 5.0B (Orchestration Persistence & Recovery Foundation), 998/998 test ile; Milestone 5.0C (Analysis Application Layer), 1042/1042 test ile; Milestone 5.0D (API & Integration Layer), 1066/1066 test ile; Milestone 5.0E (Authentication & Authorization), 1716/1716 test ile; Milestone 4.5 Cash Flow Engine kapanışı ise **2247 passed, 0 failed, 0 skipped** ile doğrulanmıştır. Son koşuda 35 dependency/Starlette/HTTP-422/Alembic deprecation warning'i raporlanmıştır; bunlar test failure değildir.
+**B. Gerçek Docker test rejimi** (nihai kabul kriteri): `PYTHONPATH=/app python -m pytest tests/ -v`, tam bağımlılık kurulu gerçek bir konteynerde çalıştırılır. **Hiçbir milestone, gerçek Docker ortamında `0 failed` sonucu görülmeden "tamamlandı" ilan edilemez.** Milestone 4.4, bu rejimde 886/886 test ile; Milestone 5.0A (Analysis Orchestrator), 971/971 test ile; Milestone 5.0B (Orchestration Persistence & Recovery Foundation), 998/998 test ile; Milestone 5.0C (Analysis Application Layer), 1042/1042 test ile; Milestone 5.0D (API & Integration Layer), 1066/1066 test ile; Milestone 5.0E (Authentication & Authorization), 1716/1716 test ile; Milestone 4.5 Cash Flow Engine kapanışı 2247/2247 test ile; Milestone 4.6 Multi-Period Trend Engine kapanışı ise **2880 passed, 0 failed, 0 skipped** ile doğrulanmıştır. Son koşuda 45 mevcut dependency/Starlette/HTTP-422/Alembic deprecation warning occurrence'ı raporlanmıştır; bunlar test failure değildir ve yeni production warning kategorisi oluşturmaz.
 
-**İki katmanlı entegrasyon testi ayrımı** (`tests/README.md`): API-sözleşme testleri SQLite üzerinde çalışır (hızlı, izole); gerçek entegrasyon testleri `TEST_DATABASE_URL`/`DATABASE_URL` ortam değişkeni ile gate'lenmiş gerçek PostgreSQL üzerinde çalışır ve ortam değişkeni yoksa `pytest.skip` ile zarifçe atlanır. Milestone 5.0B'nin PostgreSQL testleri gerçek constraint/trigger davranışını, negatif resume binding ve owner-integrity senaryolarını, idempotency çatışmasını, cursor'ın ikinci sayfasını ve migration `upgrade → downgrade → upgrade` çevrimini gerçek SQL ile doğrular. Milestone 5.0C PostgreSQL/concurrency testleri; RunScopeClaim uniqueness ve cross-tenant yarışlarını, wrong-scope finalize/projection reddini, BS/IS/Ratio owner-lineage assembly'yi ve concurrent loser SAVEPOINT rollback/discard güvenliğini gerçek transaction'larla doğrular. Milestone 5.0D testleri sekiz router operation'ını, trusted input resolution, HMAC cursor, admission ve HTTP schema sınırlarını kapsar. Milestone 5.0E testleri JWT/JWKS negatif saldırı yüzeyini, provisioning/revocation'ı, 19 kodlu identity resolution taxonomy'sini, HUMAN/SERVICE permission safety'yi, 33 action ve 198 built-in role-matrix hücresini, 17 policy reason reachability'yi, Model A hiding'i, request-bound context izolasyonunu, `AuthorizationPort` mapping/revalidation/audit delivery'yi, exact 28-route registry'yi, legacy tenant scoping'i ve production composition/readiness'i doğrular. Milestone 4.5 PostgreSQL testleri authoritative period resolution, current/prior owner-digest bağları, immutable lineage trigger'ları, transaction atomikliği, idempotent replay/concurrency ve migration cycle'ı gerçek SQL ile doğrular. Güncel tek Alembic head `d7e9a4c6f205`'dir.
+**İki katmanlı entegrasyon testi ayrımı** (`tests/README.md`): API-sözleşme testleri SQLite üzerinde çalışır (hızlı, izole); gerçek entegrasyon testleri `TEST_DATABASE_URL`/`DATABASE_URL` ortam değişkeni ile gate'lenmiş gerçek PostgreSQL üzerinde çalışır ve ortam değişkeni yoksa `pytest.skip` ile zarifçe atlanır. Milestone 5.0B'nin PostgreSQL testleri gerçek constraint/trigger davranışını, negatif resume binding ve owner-integrity senaryolarını, idempotency çatışmasını, cursor'ın ikinci sayfasını ve migration `upgrade → downgrade → upgrade` çevrimini gerçek SQL ile doğrular. Milestone 5.0C PostgreSQL/concurrency testleri; RunScopeClaim uniqueness ve cross-tenant yarışlarını, wrong-scope finalize/projection reddini, BS/IS/Ratio owner-lineage assembly'yi ve concurrent loser SAVEPOINT rollback/discard güvenliğini gerçek transaction'larla doğrular. Milestone 5.0D testleri sekiz router operation'ını, trusted input resolution, HMAC cursor, admission ve HTTP schema sınırlarını kapsar. Milestone 5.0E testleri JWT/JWKS negatif saldırı yüzeyini, provisioning/revocation'ı, 19 kodlu identity resolution taxonomy'sini, HUMAN/SERVICE permission safety'yi, 33 action ve 198 built-in role-matrix hücresini, 17 policy reason reachability'yi, Model A hiding'i, request-bound context izolasyonunu, `AuthorizationPort` mapping/revalidation/audit delivery'yi, exact 28-route registry'yi, legacy tenant scoping'i ve production composition/readiness'i doğrular. Milestone 4.5 PostgreSQL testleri authoritative period resolution, current/prior owner-digest bağları, immutable lineage trigger'ları, transaction atomikliği, idempotent replay/concurrency ve migration cycle'ı gerçek SQL ile doğrular. Milestone 4.6 PostgreSQL testleri authoritative explicit source resolution, revision/restatement chain-head, immutable N-dönem lineage, owner/execution atomikliği, idempotent SAVEPOINT loser, cross-company/currency rejection ve migration cycle'ı gerçek SQL ile doğrular. Güncel tek Alembic head `e8f1b6d3a704`'tür.
 
 **5.0D ayrı kapanış kapıları:** Tam pakete ek olarak router/API integration 15/15, PostgreSQL/migration integration 33/33, authentication/authorization/security 8/8, concurrency/admission-control 7/7 ve OpenAPI/schema contract 12/12 test ile bağımsız çalıştırılmıştır; tümünde `0 failed` sonucu alınmıştır.
 
 **5.0E ayrı kapanış kapıları:** JWT/JWKS, provisioning, E2 enforcement, identity repository/revocation, policy engine, 5.0C authorization adapter, request-bound authentication ve route/legacy security testleri birlikte **638 passed, 0 failed, 0 skipped** sonucunu vermiştir. Analysis application/API revalidation ve gerçek migration-cycle grubu ayrıca **33 passed, 0 failed, 0 skipped** ile doğrulanmıştır. Isolated PostgreSQL üzerinde `upgrade → downgrade → upgrade` çevrimi geçmiş; backend ve PostgreSQL servisleri sağlıklı kalmıştır.
 
 **4.5 ayrı kapanış kapıları:** Contract/policy **146**, account mapping/fixture **105**, period resolution unit/PostgreSQL **44**, period metadata migration **1**, indirect core **55**, reconciliation/data quality **43**, lineage contract/repository/migration **42**, V3 Orchestrator/Application-v2/Persistence-v3 **46**, Ratio integration **22** ve Executive Report/Render **94** test ile bağımsız doğrulanmıştır. Legacy orchestration/application/persistence **152**, Ratio/Benchmark/Health/Credit/Recommendation **615**, 5.0E security **638** ve migration-cycle **1** testlik regresyon kapıları da `0 failed, 0 skipped` sonucuyla geçmiştir. Backend çalışır, PostgreSQL healthy ve current Alembic head `d7e9a4c6f205` olarak doğrulanmıştır.
+
+**4.6 ayrı kapanış kapıları:** Multi-Period Trend contract/registry/resolution/math/evidence/persistence/V4/Application-v3/Report 1.2.0 testleri birlikte **633 passed**; Cash Flow regresyonları **508 passed**; BS/IS/Ratio **110 passed**; Benchmark/Health/Credit/Recommendation freeze **548 passed**; Reports 1.0.0/1.1.0/1.2.0 grubu **119 passed**; legacy orchestration/application/persistence **199 passed**; 5.0E security **638 passed**; migration-cycle + trend migration **4 passed** sonucu vermiştir. Bütün kapılarda `0 failed, 0 skipped` elde edilmiş; backend ve PostgreSQL healthy, current Alembic head `e8f1b6d3a704` olarak doğrulanmıştır.
 
 **Sentetik fixture üretimi:** `tests/data/synthetic/generate_fixtures.py`, pandas + tek seferlik `soffice --headless` (LibreOffice) dönüştürmesiyle test mizan dosyaları üretir; LibreOffice bağımlılığı **proje bağımlılığı olarak eklenmemiştir** — yalnızca fixture üretimi için tek seferlik yerel bir araçtır.
 
@@ -798,10 +838,11 @@ Aşağıdaki işlemler, hiçbir engine/servis kodunda **kesinlikle yasaktır**. 
 
 ```
 backend/
-├── alembic/                          # DB migration'ları (head: d7e9a4c6f205)
+├── alembic/                          # DB migration'ları (head: e8f1b6d3a704)
 │   └── versions/
 │       ├── c4f7a9d2e103_*.py         # Cash Flow financial-period policy metadata
-│       └── d7e9a4c6f205_*.py         # Immutable cross-period lineage (current head)
+│       ├── d7e9a4c6f205_*.py         # Immutable Cash Flow cross-period lineage
+│       └── e8f1b6d3a704_*.py         # Trend revision metadata + N-period lineage (current head)
 ├── alembic.ini
 ├── requirements.txt                  # fastapi, sqlalchemy, alembic, psycopg,
 │                                      # pydantic-settings, pandas, openpyxl,
@@ -817,6 +858,8 @@ backend/
 │   │   ├── analysis_run_scope_claim.py   # 5.0C/5.0D scope + initiating-subject reservation
 │   │   ├── security.py               # 5.0E tenant/principal/binding/membership/role state'i
 │   │   ├── cash_flow_cross_period_lineage.py # 4.5 immutable current/prior owner lineage
+│   │   ├── financial_analysis_result_revision_metadata.py # 4.6 immutable restatement/chain-head metadata
+│   │   ├── trend_analysis_lineage.py  # 4.6 immutable N-period owner/source lineage
 │   │   └── financial_analysis_result.py  # Financial owner + canonical result digest
 │   ├── schemas/                      # Pydantic şemaları (API boundary)
 │   │   └── analysis_runs_v1.py       # 5.0D versioned request/response/error sözleşmeleri
@@ -829,7 +872,7 @@ backend/
 │   │   ├── service.py                # Caller-neutral execute/resume/persist koordinasyonu
 │   │   ├── repository.py             # SQLAlchemy terminal transaction + history pagination
 │   │   ├── snapshot.py               # Fail-closed PreviousExecutionSnapshot builder
-│   │   ├── ownership.py              # Storage Ownership Matrix registry'si (4 financial + 7 artifact)
+│   │   ├── ownership.py              # Storage Ownership Matrix registry'si (5 financial + 7 artifact)
 │   │   ├── codec.py, artifacts.py    # Canonical JSON/SHA-256 ve payload tier seçimi
 │   │   ├── blob.py                   # Durable filesystem staging → READY adapter'ı
 │   │   └── ports.py, types.py        # Framework-neutral sınırlar ve immutable komut/projection'lar
@@ -852,9 +895,18 @@ backend/
 │   │   ├── cash_flow_codec.py
 │   │   ├── snapshot.py
 │   │   └── types.py
+│   ├── analysis_application_v3/      # 4.6 Trend-aware, major-version isolated application katmanı
+│   │   ├── contracts.py, ports.py    # Explicit N-period commands/queries/projections
+│   │   ├── service.py               # V4 senkron use-case/source re-query koordinasyonu
+│   │   └── mapping.py, projection.py # V4 command ve result DTO mapping'i
+│   ├── orchestration_persistence_v4/ # 4.6 V4 owner/snapshot/lineage genişlemesi
+│   │   ├── adapter.py, snapshot.py
+│   │   └── types.py
 │   ├── integrations/
 │   │   ├── cash_flow_period_repository.py  # Authoritative multi-period PostgreSQL resolver
 │   │   ├── cash_flow_lineage_repository.py # Immutable cross-period lineage repository
+│   │   ├── trend_period_repository.py     # Authoritative N-period/revision resolver
+│   │   ├── trend_lineage_repository.py    # Immutable trend lineage repository
 │   │   └── analysis_http/            # 5.0D framework-independent integration adapters
 │   │       ├── contracts.py          # Authentication/input/admission/runtime contracts
 │   │       ├── security.py           # AuthenticationContext trust/freshness validation
@@ -914,11 +966,18 @@ backend/
 │       │   ├── calculation.py        # Operating/investing/financing indirect core
 │       │   ├── reconciliation.py, quality.py # Reconciliation/completeness/data quality
 │       │   └── service.py            # Saf engine giriş noktası
+│       ├── multi_period_trend/       # 4.6 saf nominal N-dönem trend engine'i
+│       │   ├── types.py, contracts.py # Frozen result/status/evidence sözleşmeleri
+│       │   ├── registry.py, policy.py # 45 metric + period/math policy
+│       │   ├── series_resolution.py, resolution_contracts.py
+│       │   ├── pairwise.py, cagr.py, direction.py, volatility.py, break_analysis.py
+│       │   └── analyzer.py, result_assembly.py, quality.py, lineage.py
 │       ├── financial_ratios/
 │       │   └── cash_flow_integration.py # Altı canonical cash-flow oranı
 │       ├── executive_reports/
 │       │   ├── __init__.py
 │       │   ├── cash_flow_integration.py # Report 1.1.0 presentation-only projection
+│       │   ├── trend_integration.py, trend_projection.py # Report 1.2.0 exact 12-metric projection
 │       │   └── service.py
 │       ├── dashboards/
 │       │   ├── __init__.py
@@ -934,9 +993,15 @@ backend/
 │           ├── execution_plan.py     # DAG'dan deterministik topological sort
 │           ├── fingerprint.py        # SHA-256 canonical-JSON input fingerprint
 │           └── service.py            # run_orchestration()
-│       └── analysis_orchestrator_v3/ # 4.5 ayrı major-version graph/dispatch/service
+│       ├── analysis_orchestrator_v3/ # 4.5 ayrı major-version graph/dispatch/service
 │           ├── types.py              # 11-node V3 public internal contract
 │           ├── registry.py           # 23 all_of + 2 any_of + 3 optional = 28 kenar
+│           ├── dispatch.py, execution_plan.py
+│           ├── fingerprint.py
+│           └── service.py
+│       └── analysis_orchestrator_v4/ # 4.6 ayrı major-version graph/dispatch/service
+│           ├── types.py              # 12-node V4 + exact TrendAnalysisResult envelope
+│           ├── registry.py           # 23 all_of + 2 any_of + 4 optional = 29 kenar
 │           ├── dispatch.py, execution_plan.py
 │           ├── fingerprint.py
 │           └── service.py
@@ -945,6 +1010,9 @@ backend/
     ├── conftest.py                   # Autouse registry snapshot/restore fixture
     ├── data/synthetic/generate_fixtures.py
     ├── data/synthetic/cash_flow_*_golden_v1.json # Deterministic indirect/reconciliation/ratio vectors
+    ├── fixtures/multi_period_trend_* # 4.6 deterministic math/evidence/report vectors
+    ├── test_multi_period_trend_*.py        # 4.6 contract/registry/math/evidence/integration tests
+    ├── test_trend_*_postgres.py            # 4.6 resolver/lineage/persistence PostgreSQL tests
     ├── _orch_fakes.py                 # Orchestrator testleri için paylaşımlı sahte motor fabrikaları
     ├── test_analysis_runs_api.py          # 5.0D router/OpenAPI/subject/admission testleri
     ├── test_analysis_http_*.py            # Auth, resolver, cursor, read-facade testleri
@@ -1092,6 +1160,14 @@ Bir milestone'un "üretime hazır" (%100 Production Readiness) ilan edilebilmesi
 - [ ] V3 graph exact 11/23/2/3/28 shape'iyle doğrulanıyor; legacy 5.0A–5.0E public sözleşmeleri değişmiyor ve Application-v2/Persistence-v3 major-version izolasyonu import/contract testlerinden geçiyor.
 - [ ] Altı Cash Flow ratio code'u ve Executive Report 1.1.0 cash-aware projection'ı canonical result/evidence kullanıyor; ratio score/formül registry'si, 18-section report registry'si ve legacy Report 1.0.0 davranışı değişmiyor.
 - [ ] `c4f7a9d2e103 → d7e9a4c6f205` Cash Flow migration zinciri tek head ve gerçek PostgreSQL üzerinde upgrade/downgrade/upgrade çevrimiyle doğrulanıyor.
+- [ ] Multi-Period Trend registry exact 45 metriği (11 BS + 11 IS + 7 Cash Flow + 16 Ratio) ve canonical digest `1b2085553cd2009c349cbca45d5f6ebc9f2f8ba07f9b9ee1b2930554bc52d19e` ile import/golden testlerinde doğruluyor.
+- [ ] Altı period family ayrı tutuluyor; pairwise/direction/volatility/break minimumları 2/3/4/5 ve CAGR eligibility/gap/sign kuralları boundary testlerinden geçiyor. Eksik observation sıfır veya gap-köprüsüne dönüşmüyor.
+- [ ] Trend source set yalnız explicit owner ID'lerinden authoritative PostgreSQL resolution ile kuruluyor; tenant/company/currency/type/status/digest, period cadence ve revision/restatement chain-head fail-closed doğrulanıyor. Latest-result lookup veya positive cache yok.
+- [ ] Trend completeness exact `45 × N` expected observation set'inden; evidence `EXACT/DERIVED/ESTIMATED/UNAVAILABLE` zincirinden hesaplanıyor. Ayrı confidence, score veya favorability üretilmiyor.
+- [ ] Trend payload'ının tek sahibi `FinancialAnalysisResult`; immutable revision metadata ve N-dönem lineage yalnız owner/digest/period/rol referansı taşıyor. Owner, revision, lineage, V4 execution ve terminal run atomik; concurrent loser SAVEPOINT rollback/discard ile temiz.
+- [ ] V4 graph exact 12/23/2/4/29 shape'iyle doğrulanıyor; V3/Application-v2/Persistence-v3 ve 5.0A–5.0E public sözleşmeleri frozen kalıyor. Application-v3/Persistence-v4 import/contract testleri major-version izolasyonunu koruyor.
+- [ ] Executive Report 1.2.0 exact 12 trend metriğini presentation-only projekte ediyor; Report 1.0.0/1.1.0 ve Ratio/Benchmark/Health/Credit/Recommendation sonuçları/score ağırlıkları değişmiyor.
+- [ ] `d7e9a4c6f205 → e8f1b6d3a704` Trend migration zinciri tek head ve gerçek PostgreSQL üzerinde upgrade/downgrade/upgrade çevrimiyle doğrulanıyor.
 - [ ] Commit/push YAPILMADI (yalnızca kullanıcı açıkça isterse yapılır).
 
 ---
@@ -1148,7 +1224,7 @@ feat(persistence): Company/FinancialPeriod/FinancialDocument altyapısı
 
 ## 27. Mimari Prensiplerin Kısa Özeti
 
-FINOS'un mimarisi, aşağıdaki yirmi yedi prensibe indirgenebilir:
+FINOS'un mimarisi, aşağıdaki yirmi sekiz prensibe indirgenebilir:
 
 1. **Denetlenebilirlik önce gelir.** Her sayı, kaynağına kadar izlenebilir olmalıdır (provenance, source_engine_codes, section_source_mapping).
 2. **Determinizm mutlaktır.** Aynı girdi → aynı çıktı, her zaman. Sistem saati, rastgelelik, global durum bu garantiyi asla bozamaz.
@@ -1177,9 +1253,10 @@ FINOS'un mimarisi, aşağıdaki yirmi yedi prensibe indirgenebilir:
 25. **Kaynak varlığı tenant sınırını delemez.** Durable resource çözümleme yalnız tenant-qualified Model A lookup kullanır; unknown ve cross-tenant kaynak aynı hidden not-found sonucuna gider. Unscoped existence probe veya fallback yasaktır; owner ve initiator farklı semantik kimliklerdir.
 26. **Route güvenliği executable registry ile kapalı envanterdir.** Yalnız açıkça public ilan edilen live/ready endpoint'leri authentication istemez. Analysis-run ve legacy yüzeylerin tamamı request-bound context, exact action authorization, tenant scoping, audit/redaction ve production composition doğrulamasına tabidir; sınıflandırılmamış route production-ready değildir.
 27. **Çok-dönemli nakit akışı kanıt-temelli ve tek-sahiplidir.** Dolaylı Cash Flow Engine eksik değeri sıfır veya plug ile kapatmaz; current/prior period ve cash-equivalent sınıflandırmasını authoritative metadata, deterministic registry ve canonical digest ile doğrular. Her satırın evidence/lineage'ı görünürdür; payload `FinancialAnalysisResult`'ta tek kez tutulur, immutable cross-period lineage yalnız referans taşır ve ayrı V3/Application-v2/Persistence-v3 sözleşmeleri legacy public contract freeze'ini korur.
+28. **N-dönem trend authoritative, nominal ve lineage-temellidir.** Trend Engine explicit source set'i tenant/company/currency/period/revision/digest bağlarıyla fresh PostgreSQL state'inden çözer; eksik observation'ı sıfır, gap'i transition veya nominal büyümeyi reel büyüme olarak sunmaz. 45-metrik registry, evidence/completeness ve 2/3/4/5 minimumları deterministiktir; payload tek `FinancialAnalysisResult` sahibinde, revision/N-lineage ise immutable referanslarda kalır. V4/Application-v3/Persistence-v4 ailesi legacy public contract freeze'ini, Report 1.2.0 ise presentation-only sınırını korur.
 
-Bu yirmi yedi prensip, bu kitabın geri kalan bölümlerinin özüdür. Yeni bir milestone tasarlanırken bir kural belirsizse, doğru cevap her zaman bu yirmi yedi prensibin en katı yorumudur.
+Bu yirmi sekiz prensip, bu kitabın geri kalan bölümlerinin özüdür. Yeni bir milestone tasarlanırken bir kural belirsizse, doğru cevap her zaman bu yirmi sekiz prensibin en katı yorumudur.
 
 ---
 
-*Bu doküman, FINOS mimarisinin Milestone 5.0E ve Milestone 4.5 Cash Flow Engine kapanışı itibarıyla (2247 passed, 0 failed, 0 skipped; Docker-doğrulanmış dolaylı Cash Flow core/mapping/reconciliation, authoritative multi-period resolution, immutable cross-period lineage, V3 Orchestrator/Application-v2/Persistence-v3, Ratio/Executive Report entegrasyonları, tüm legacy ve security regresyonları dahil) durumunu yansıtır. Analysis Platform; saf engine ve major-version izole Orchestrator katmanları, immutable persistence/recovery foundation, framework-bağımsız application use-case katmanları, trusted/versioned HTTP integration boundary'si ve provider-neutral, fail-closed Authentication & Authorization katmanından oluşur. Güncel tek Alembic head `d7e9a4c6f205`'dir. Queue, worker, scheduler, batch runner, UI, distributed lock, automatic retry/backoff, doğrudan yöntem, grup eliminasyonu, provider-spesifik login/consent UI, browser session/cookie, MFA enrollment ve event sourcing mevcut değildir. 5.0A–5.0E public sözleşmeleri değişmemiştir. Gelecekteki her milestone bu kitaba uymalı; bu kitapla çelişen her tasarım kararı ayrı bir onaylı revizyon turunda bu kitaba işlenmelidir.*
+*Bu doküman, FINOS mimarisinin Milestone 5.0E, Milestone 4.5 Cash Flow Engine ve Milestone 4.6 Multi-Period Trend Engine kapanışı itibarıyla (2880 passed, 0 failed, 0 skipped; authoritative N-dönem resolution, 45-metrik nominal trend core, evidence/completeness, immutable revision/N-lineage, V4 Orchestrator/Application-v3/Persistence-v4, Report 1.2.0 projection'ı ile tüm legacy, Cash Flow ve security regresyonları dahil) durumunu yansıtır. Analysis Platform; saf engine ve major-version izole Orchestrator katmanları, immutable persistence/recovery foundation, framework-bağımsız application use-case katmanları, trusted/versioned HTTP integration boundary'si ve provider-neutral, fail-closed Authentication & Authorization katmanından oluşur. Güncel tek Alembic head `e8f1b6d3a704`'tür. Queue, worker, scheduler, batch runner, UI, distributed lock, automatic retry/backoff, doğrudan nakit akış yöntemi, grup konsolidasyonu/eliminasyonu, enflasyon düzeltmesi, trend forecasting, provider-spesifik login/consent UI, browser session/cookie, MFA enrollment ve event sourcing mevcut değildir. 5.0A–5.0E ile V3/Application-v2/Persistence-v3 public sözleşmeleri değişmemiştir. Gelecekteki her milestone bu kitaba uymalı; bu kitapla çelişen her tasarım kararı ayrı bir onaylı revizyon turunda bu kitaba işlenmelidir.*
