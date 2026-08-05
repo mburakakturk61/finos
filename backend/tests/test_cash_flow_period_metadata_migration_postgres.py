@@ -33,7 +33,7 @@ def test_cash_flow_period_metadata_fail_safe_downgrade_and_cycle():
         engine = create_engine(isolated_url)
         tenant_id, company_id, period_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
         with engine.begin() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "d7e9a4c6f205"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "e8f1b6d3a704"
             connection.execute(text("""
                 INSERT INTO security_tenants (id,tenant_key,status,policy_version,version)
                 VALUES (:id,:key,'ACTIVE',1,1)
@@ -77,7 +77,7 @@ def test_cash_flow_period_metadata_fail_safe_downgrade_and_cycle():
         }
         command.upgrade(config, "head")
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "d7e9a4c6f205"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "e8f1b6d3a704"
         engine.dispose()
     finally:
         os.environ["DATABASE_URL"] = original_url

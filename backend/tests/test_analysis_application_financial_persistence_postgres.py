@@ -38,6 +38,7 @@ from app.engines.income_statement.service import IncomeStatementAnalysisOutcome
 from app.models.company import Company
 from app.models.enums import AnalysisSourceRole, AnalysisStatus, PeriodStatus, PeriodType, SourceMode
 from app.models.financial_analysis_result import FinancialAnalysisResult
+from app.models.financial_analysis_result_revision_metadata import FinancialAnalysisResultRevisionMetadata
 from app.models.financial_analysis_result_source import FinancialAnalysisResultSource
 from app.models.financial_period import FinancialPeriod
 from app.orchestration_persistence.blob import FilesystemBlobStore
@@ -115,6 +116,14 @@ def test_bs_is_ratio_new_owner_lineage_is_atomic_postgres(tmp_path):
         ratio = session.scalar(select(FinancialAnalysisResult).where(FinancialAnalysisResult.company_id == scope.company_id, FinancialAnalysisResult.analysis_type == "financial_ratios"))
         roles = set(session.scalars(select(FinancialAnalysisResultSource.role).where(FinancialAnalysisResultSource.analysis_result_id == ratio.id)))
         assert roles == {AnalysisSourceRole.PRIMARY_ANALYSIS, AnalysisSourceRole.SUPPORTING_ANALYSIS}
+        metadata = tuple(session.scalars(select(FinancialAnalysisResultRevisionMetadata).where(
+            FinancialAnalysisResultRevisionMetadata.company_id == scope.company_id,
+            FinancialAnalysisResultRevisionMetadata.period_id == scope.financial_period_id,
+        )))
+        assert len(metadata) == 3
+        assert {(item.restatement_state, item.restatement_revision, item.restatement_reason) for item in metadata} == {
+            ("ORIGINAL", 0, "NONE")
+        }
 
 
 def test_mixed_financial_results_create_no_phantom_bindings_postgres(tmp_path):

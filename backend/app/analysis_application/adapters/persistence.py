@@ -21,6 +21,7 @@ from app.engines.analysis_orchestrator.types import EngineCode
 from app.models.enums import AnalysisSourceRole, AnalysisStatus, AnalysisType, SourceMode
 from app.models.company import Company
 from app.models.financial_analysis_result import FinancialAnalysisResult
+from app.models.financial_analysis_result_revision_metadata import FinancialAnalysisResultRevisionMetadata
 from app.models.financial_analysis_result_source import FinancialAnalysisResultSource
 from app.orchestration_persistence.blob import FilesystemBlobStore
 from app.orchestration_persistence.codec import canonical_json_bytes
@@ -57,18 +58,23 @@ class SqlAlchemyRunPersistenceAdapter:
         self, request: ApplicationTerminalPersistenceRequest,
     ) -> TerminalPersistenceResult:
         self.session.execute(text("SET LOCAL lock_timeout = '5s'"))
-        company_id = self.session.scalar(
-            select(Company.id)
+        company = self.session.scalar(
+            select(Company)
             .where(Company.id == request.scope.company_id)
             .with_for_update()
         )
-        if company_id is None:
+        if company is None or company.tenant_id is None:
             raise ValueError("Terminal persistence company scope is unavailable.")
         existing_before = self.repository.load_run(request.run_result.run_id)
         savepoint = self.session.begin_nested()
         staged: list[FinancialAnalysisResult] = []
         try:
-            bindings = self._stage_financial_owners(request, request.financial_ownership_plan.audit_times, staged)
+            bindings = self._stage_financial_owners(
+                request,
+                request.financial_ownership_plan.audit_times,
+                staged,
+                company.tenant_id,
+            )
             command = PersistTerminalRunCommand(
                 scope=PersistenceRunScope(request.scope.company_id, request.scope.financial_period_id),
                 run_result=request.run_result,
@@ -103,6 +109,7 @@ class SqlAlchemyRunPersistenceAdapter:
         self, request: ApplicationTerminalPersistenceRequest,
         audit_times: OwnerAuditTimes,
         staged: list[FinancialAnalysisResult],
+        tenant_id,
     ) -> tuple[FinancialResultOwnerBinding, ...]:
         records = {ApplicationEngineCode(record.engine_code.value): record for record in request.run_result.engine_records}
         owner_ids = {}
@@ -160,6 +167,17 @@ class SqlAlchemyRunPersistenceAdapter:
             )
             self.session.add(owner)
             self.session.flush()
+            self.session.add(FinancialAnalysisResultRevisionMetadata(
+                analysis_result_id=owner.id,
+                tenant_id=tenant_id,
+                company_id=request.scope.company_id,
+                period_id=request.scope.financial_period_id,
+                restatement_state="ORIGINAL",
+                restatement_revision=0,
+                restatement_reason="NONE",
+                supersedes_analysis_result_id=None,
+                metadata_schema_version="1.0.0",
+            ))
             staged.append(owner)
             owner_ids[node.engine_code] = owner.id
             for role, source_document_id, source_analysis_id in resolved_lineage:

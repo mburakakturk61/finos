@@ -41,6 +41,7 @@ from app.analysis_application.contracts import (
     PayloadOwnerType,
 )
 from app.models.financial_analysis_result import FinancialAnalysisResult
+from app.models.financial_analysis_result_revision_metadata import FinancialAnalysisResultRevisionMetadata
 from app.models.financial_analysis_result_source import FinancialAnalysisResultSource
 from app.models.orchestration_persistence import (
     OrchestrationArtifact,
@@ -447,6 +448,17 @@ class SqlAlchemyRunPersistenceAdapterV3:
         )
         self.session.add(owner)
         self.session.flush()
+        self.session.add(FinancialAnalysisResultRevisionMetadata(
+            analysis_result_id=owner.id,
+            tenant_id=request.verified_scope.persistence_scope.tenant_id,
+            company_id=request.verified_scope.persistence_scope.company_id,
+            period_id=request.verified_scope.persistence_scope.period_id,
+            restatement_state="ORIGINAL",
+            restatement_revision=0,
+            restatement_reason="NONE",
+            supersedes_analysis_result_id=None,
+            metadata_schema_version="1.0.0",
+        ))
         if not hmac.compare_digest(_owner_content_digest(record, owner), node.expected_owner_content_digest):
             _fail(ApplicationV2PortErrorCode.INTEGRITY)
         return owner

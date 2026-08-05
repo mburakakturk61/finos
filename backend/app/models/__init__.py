@@ -9,6 +9,7 @@ from app.models.bulk_upload_item import BulkUploadItem
 from app.models.analysis_run_scope_claim import AnalysisRunScopeClaim
 from app.models.company import Company
 from app.models.cash_flow_cross_period_lineage import CashFlowCrossPeriodLineage
+from app.models.financial_analysis_result_revision_metadata import FinancialAnalysisResultRevisionMetadata
 from app.models.enums import (
     AnalysisSourceRole,
     AnalysisStatus,
@@ -27,6 +28,7 @@ from app.models.financial_analysis_result import FinancialAnalysisResult
 from app.models.financial_analysis_result_source import FinancialAnalysisResultSource
 from app.models.financial_document import FinancialDocument
 from app.models.financial_period import FinancialPeriod
+from app.models.trend_analysis_lineage import TrendAnalysisLineage
 from app.models.orchestration_persistence import (
     OrchestrationArtifact,
     OrchestrationArtifactLocation,
@@ -51,6 +53,8 @@ from app.models.security import (
 __all__ = [
     "Company",
     "CashFlowCrossPeriodLineage",
+    "TrendAnalysisLineage",
+    "FinancialAnalysisResultRevisionMetadata",
     "FinancialPeriod",
     "FinancialDocument",
     "FinancialAnalysisResult",

@@ -1,0 +1,15 @@
+{
+  "case": "complete_single_metric_annual_v1",
+  "metric_code": "bs.total_assets",
+  "values": ["100", "110", "121", "133.1", "146.41"],
+  "status": "complete",
+  "result_digest": "7de37fda77333d73fd926c97b7dadbd350138dc8cbf61a50cb3eb731193b2d8f",
+  "result_reference": "trend:v1:sha256:7de37fda77333d73fd926c97b7dadbd350138dc8cbf61a50cb3eb731193b2d8f",
+  "quality_digest": "f1f6fa6bcf6054888a8def0ece8448a42ab4e28f4d20a3d1fee7de8d82ac1d5d",
+  "expected_period_count": 5,
+  "available_observation_count": 5,
+  "calculated_transition_count": 4,
+  "calculated_cagr_count": 1,
+  "calculated_volatility_count": 1,
+  "calculated_break_count": 1
+}

@@ -1,0 +1,14 @@
+{
+  "fixture_version": "multi-period-trend-aggregates/1.0.0",
+  "cases": [
+    {"name": "steady_positive_annual_growth", "values": ["100", "110", "121", "133.1", "146.41"], "cagr_status": "calculated", "stability": false, "volatility_category": "low", "break_detected": false},
+    {"name": "stable_series", "values": ["100", "100", "100", "100", "100"], "cagr_status": "calculated", "stability": true, "volatility_category": "low", "break_detected": false},
+    {"name": "high_volatility", "values": ["100", "200", "50", "300", "20"], "cagr_status": "calculated", "stability": false, "volatility_category": "high"},
+    {"name": "clear_trend_break", "values": ["100", "120", "144", "100", "60"], "cagr_status": "calculated", "stability": false, "break_detected": true},
+    {"name": "no_break", "values": ["100", "110", "121", "133.1", "146.41"], "break_detected": false},
+    {"name": "sign_changing", "values": ["100", "50", "-20", "-40", "-80"], "cagr_status": "sign_change", "stability": null},
+    {"name": "gap_segmented", "values": ["100", "110", "121", "133.1", "146.41"], "segments": [0, 0, 1, 1, 1], "years": [2020, 2021, 2023, 2024, 2025], "cagr_status": "gap_present", "stability": null, "volatility_category": "unavailable"},
+    {"name": "estimated_evidence", "values": ["100", "110", "121", "133.1", "146.41"], "evidence": ["exact", "estimated", "exact", "exact", "exact"], "aggregate_evidence": "estimated"},
+    {"name": "three_observation_insufficient_advanced", "values": ["100", "110", "121"], "volatility_category": "unavailable", "break_detected": null}
+  ]
+}

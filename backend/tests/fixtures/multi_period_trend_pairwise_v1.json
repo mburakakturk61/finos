@@ -1,0 +1,15 @@
+{
+  "fixture_version": "multi-period-trend-pairwise/1.0.0",
+  "cases": [
+    {"name": "steadily_increasing_positive", "values": ["100", "120", "150"], "kinds": ["percentage_available", "percentage_available"], "pair_directions": ["increasing", "increasing"], "aggregate_direction": "increasing"},
+    {"name": "steadily_decreasing_positive", "values": ["150", "120", "100"], "kinds": ["percentage_available", "percentage_available"], "pair_directions": ["decreasing", "decreasing"], "aggregate_direction": "decreasing"},
+    {"name": "stable", "values": ["100.000", "100.005", "100.010"], "kinds": ["percentage_available", "percentage_available"], "pair_directions": ["stable", "stable"], "aggregate_direction": "stable"},
+    {"name": "mixed", "values": ["100", "130", "110"], "kinds": ["percentage_available", "percentage_available"], "pair_directions": ["increasing", "decreasing"], "aggregate_direction": "mixed"},
+    {"name": "sign_changing", "values": ["100", "-10", "20"], "kinds": ["absolute_only_sign_change", "absolute_only_sign_change"], "pair_directions": ["sign_change", "sign_change"], "aggregate_direction": "sign_change"},
+    {"name": "loss_improving", "values": ["-100", "-70", "-20"], "kinds": ["absolute_only_negative_base", "absolute_only_negative_base"], "pair_directions": ["increasing", "increasing"], "negative_directions": ["improving", "improving"], "aggregate_direction": "increasing"},
+    {"name": "loss_worsening", "values": ["-20", "-70", "-100"], "kinds": ["absolute_only_negative_base", "absolute_only_negative_base"], "pair_directions": ["decreasing", "decreasing"], "negative_directions": ["worsening", "worsening"], "aggregate_direction": "decreasing"},
+    {"name": "zero_base", "values": ["0", "10", "20"], "kinds": ["absolute_only_zero_base", "percentage_available"], "pair_directions": ["increasing", "increasing"], "aggregate_direction": "increasing"},
+    {"name": "gap_segmented", "values": ["10", "20", "30", "40"], "segments": [0, 0, 1, 1], "years": [2021, 2022, 2024, 2025], "kinds": ["percentage_available", "percentage_available"], "pair_directions": ["increasing", "increasing"], "aggregate_direction": "insufficient_data"},
+    {"name": "two_observation_insufficient", "values": ["10", "20"], "kinds": ["percentage_available"], "pair_directions": ["increasing"], "aggregate_direction": "insufficient_data"}
+  ]
+}

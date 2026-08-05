@@ -29,7 +29,7 @@ def test_migration_upgrade_downgrade_upgrade_on_isolated_postgres_database():
         command.upgrade(config, "head")
         isolated_engine = create_engine(isolated_url)
         with isolated_engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "d7e9a4c6f205"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "e8f1b6d3a704"
             assert connection.scalar(text("SELECT count(*) FROM security_permissions")) == 33
         isolated_engine.dispose()
     finally:

@@ -110,18 +110,19 @@ def test_period_comparison_warns_about_single_period_scope():
     assert any(w.get("code") == "SINGLE_PERIOD_COMPARISON_ONLY" for w in result.warnings)
 
 
-def test_no_trend_report_residue_in_source_files():
+def test_legacy_report_source_files_have_no_trend_report_type_residue():
     banned_terms = ("Trend Report", "TREND_REPORT", "trend_report")
     project_root = Path(__file__).resolve().parents[1]
-    scanned = 0
-    for path in (project_root / "app" / "engines").rglob("*.py"):
-        if "__pycache__" in str(path):
-            continue
+    paths = (
+        project_root / "app" / "engines" / "common" / "report_types.py",
+        project_root / "app" / "engines" / "common" / "report_registry.py",
+        project_root / "app" / "engines" / "executive_reports" / "service.py",
+        project_root / "app" / "engines" / "executive_reports" / "cash_flow_integration.py",
+    )
+    for path in paths:
         text = path.read_text(encoding="utf-8")
-        scanned += 1
         for term in banned_terms:
             assert term not in text, f"{path}: yasaklı '{term}' ifadesi bulundu"
-    assert scanned > 0
 
 
 def test_period_comparison_content_makes_no_multi_year_trend_claims():

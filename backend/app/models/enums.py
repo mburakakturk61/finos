@@ -159,6 +159,7 @@ class AnalysisType(str, enum.Enum):
     CASH_FLOW = "cash_flow"
     TAX_RETURN = "tax_return"
     FINANCIAL_RATIOS = "financial_ratios"
+    MULTI_PERIOD_TREND = "multi_period_trend"
 
 
 class AnalysisStatus(str, enum.Enum):

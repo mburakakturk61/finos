@@ -1,0 +1,55 @@
+{
+  "contract_version": "1.2.0",
+  "metric_codes": [
+    "bs.total_assets",
+    "bs.equity",
+    "bs.cash_and_equivalents",
+    "is.net_sales",
+    "is.ebitda",
+    "is.net_profit",
+    "cf.operating_cash_flow",
+    "cf.free_cash_flow",
+    "ratio.current_ratio",
+    "ratio.debt_to_equity",
+    "ratio.net_profit_margin",
+    "ratio.cash_flow_to_debt"
+  ],
+  "scenarios": {
+    "complete_five_period_annual": {
+      "status": "complete",
+      "direction": "increasing",
+      "observation_count": 5,
+      "segment_count": 1,
+      "presentation_digest": "6fe2690ce301a939fe282639bcfa6c8d4eef9859f21af86905333d13768bae66"
+    },
+    "partial_gap_segmented": {
+      "status": "partial",
+      "gap_count": 1,
+      "segment_count": 2,
+      "presentation_digest": "e8e76424824a5b7ecb819581121d7b844e2a03841ab8ca11f7de5a7e27498f30"
+    },
+    "two_observation": {
+      "status": "insufficient_for_trend",
+      "direction": "insufficient_data",
+      "observation_count": 2,
+      "presentation_digest": "338b57761572332f55709cfd82e41ef78bc6be5090f7236c7b874e2aacf1a03b"
+    },
+    "sign_change_loss": {
+      "status": "partial",
+      "transition_kind": "absolute_only_negative_base",
+      "negative_base_direction": "improving",
+      "sign_change_kind": "absolute_only_sign_change",
+      "presentation_digest": "e846834afbb3b5c0bc1e57428b93d6120fa5f270cdf734486bcd03c06116dded"
+    },
+    "volatility_break": {
+      "status": "complete",
+      "volatility_category": "high",
+      "break_detected": true,
+      "presentation_digest": "7e05d1e314ac87320c6bbf81d6542222da4513d5d1150fe5b86ca6f5b9dab8a0"
+    },
+    "invalid_integrity": {
+      "statuses": ["invalid_input", "integrity_failure"],
+      "result_reference": null
+    }
+  }
+}

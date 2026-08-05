@@ -14,8 +14,10 @@ from sqlalchemy.orm import Session
 from app.engines.analysis_orchestrator.execution_plan import get_execution_plan
 from app.engines.analysis_orchestrator.registry import ENGINE_DEPENDENCY_REGISTRY
 from app.engines.analysis_orchestrator.types import EngineCode, EngineExecutionStatus
+from app.models.company import Company
 from app.models.enums import AnalysisStatus
 from app.models.financial_analysis_result import FinancialAnalysisResult
+from app.models.financial_analysis_result_revision_metadata import FinancialAnalysisResultRevisionMetadata
 from app.models.financial_analysis_result_source import FinancialAnalysisResultSource
 from app.models.orchestration_persistence import (
     OrchestrationArtifact,
@@ -252,6 +254,20 @@ class SqlAlchemyOrchestrationRepository:
         )
         self.session.add(owner)
         self.session.flush()
+        company = self.session.get(Company, command.scope.company_id)
+        if company is None or company.tenant_id is None:
+            _fail("Financial result revision metadata scope is unavailable.")
+        self.session.add(FinancialAnalysisResultRevisionMetadata(
+            analysis_result_id=owner.id,
+            tenant_id=company.tenant_id,
+            company_id=command.scope.company_id,
+            period_id=command.scope.period_id,
+            restatement_state="ORIGINAL",
+            restatement_revision=0,
+            restatement_reason="NONE",
+            supersedes_analysis_result_id=None,
+            metadata_schema_version="1.0.0",
+        ))
         for source in create.source_bindings:
             self.session.add(FinancialAnalysisResultSource(
                 analysis_result_id=owner.id, company_id=command.scope.company_id,

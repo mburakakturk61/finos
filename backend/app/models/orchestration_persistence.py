@@ -169,12 +169,12 @@ class OrchestrationEngineExecution(Base):
             name="no_result_for_non_result_status",
         ),
         CheckConstraint(
-            "engine_code IN ('fs_balance_sheet','fs_income_statement','cash_flow','ratio','benchmark','health_score','credit_score','recommendation','executive_report','dashboard','render_contract')",
+            "engine_code IN ('fs_balance_sheet','fs_income_statement','cash_flow','ratio','benchmark','health_score','credit_score','recommendation','executive_report','dashboard','render_contract','multi_period_trend')",
             name="engine_code",
         ),
         CheckConstraint(
-            "((engine_code IN ('fs_balance_sheet','fs_income_statement','cash_flow','ratio')) AND artifact_id IS NULL) OR "
-            "((engine_code NOT IN ('fs_balance_sheet','fs_income_statement','cash_flow','ratio')) AND financial_analysis_result_id IS NULL)",
+            "((engine_code IN ('fs_balance_sheet','fs_income_statement','cash_flow','ratio','multi_period_trend')) AND artifact_id IS NULL) OR "
+            "((engine_code NOT IN ('fs_balance_sheet','fs_income_statement','cash_flow','ratio','multi_period_trend')) AND financial_analysis_result_id IS NULL)",
             name="engine_owner_mapping",
         ),
         CheckConstraint(

@@ -19,6 +19,7 @@ from app.core.config import get_settings
 
 
 REVISION = "d7e9a4c6f205"
+CURRENT_HEAD = "e8f1b6d3a704"
 MIGRATION = Path(__file__).parents[1] / "alembic" / "versions" / f"{REVISION}_cash_flow_cross_period_lineage.py"
 
 
@@ -58,7 +59,7 @@ def test_migration_is_self_contained_and_repository_has_one_head():
     assert "app" not in modules
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     config.set_main_option("script_location", str(Path(__file__).parents[1] / "alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == [REVISION]
+    assert ScriptDirectory.from_config(config).get_heads() == [CURRENT_HEAD]
 
 
 def test_exact_catalog_and_empty_upgrade_downgrade_upgrade_cycle():
@@ -84,7 +85,7 @@ def test_exact_catalog_and_empty_upgrade_downgrade_upgrade_cycle():
             item["name"] for item in inspector.get_indexes("cash_flow_cross_period_lineage")
         }
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == REVISION
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == CURRENT_HEAD
             triggers = set(connection.scalars(text("""
                 SELECT tgname FROM pg_trigger
                 WHERE tgrelid='cash_flow_cross_period_lineage'::regclass AND NOT tgisinternal
@@ -99,7 +100,7 @@ def test_exact_catalog_and_empty_upgrade_downgrade_upgrade_cycle():
         assert "cash_flow_cross_period_lineage" not in inspect(engine).get_table_names()
         command.upgrade(config, "head")
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == REVISION
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == CURRENT_HEAD
     finally:
         _drop(original, name, admin, engine)
 
@@ -152,7 +153,6 @@ def test_downgrade_with_cash_flow_owner_is_fail_safe():
         with pytest.raises(RuntimeError, match="must be empty before downgrade"):
             command.downgrade(config, "c4f7a9d2e103")
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == REVISION
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == CURRENT_HEAD
     finally:
         _drop(original, name, admin, engine)
-

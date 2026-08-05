@@ -51,6 +51,7 @@ from app.models.enums import (
     SourceMode,
 )
 from app.models.financial_analysis_result import FinancialAnalysisResult
+from app.models.financial_analysis_result_revision_metadata import FinancialAnalysisResultRevisionMetadata
 from app.models.financial_period import FinancialPeriod
 from app.models.orchestration_persistence import OrchestrationEngineExecution, OrchestrationRun
 from app.orchestration_persistence.blob import FilesystemBlobStore
@@ -247,9 +248,17 @@ def test_v3_terminal_owner_lineage_replay_and_snapshot_are_atomic(
             FinancialAnalysisResult.company_id == COMPANY_ID,
             FinancialAnalysisResult.period_id == CURRENT_ID,
         )))
+        revision_metadata = tuple(session.scalars(select(FinancialAnalysisResultRevisionMetadata).where(
+            FinancialAnalysisResultRevisionMetadata.company_id == COMPANY_ID,
+            FinancialAnalysisResultRevisionMetadata.period_id == CURRENT_ID,
+        )))
         cash_owner = next(item for item in owners if item.analysis_type.value == "cash_flow")
         assert len(executions) == 3
         assert len(owners) == 3
+        assert len(revision_metadata) == 3
+        assert {(item.restatement_state, item.restatement_revision, item.restatement_reason) for item in revision_metadata} == {
+            ("ORIGINAL", 0, "NONE")
+        }
         assert not tuple(session.scalars(select(CashFlowCrossPeriodLineage).where(
             CashFlowCrossPeriodLineage.cash_flow_analysis_result_id == cash_owner.id
         )))
@@ -299,4 +308,3 @@ def test_v3_terminal_owner_lineage_replay_and_snapshot_are_atomic(
         assert session.scalar(select(text("count(*)")).select_from(FinancialAnalysisResult).where(
             FinancialAnalysisResult.id.in_(owner_ids)
         )) == 3
-
